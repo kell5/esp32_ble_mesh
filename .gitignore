@@ -1,0 +1,19 @@
+# ESP-IDF build output
+build/
+
+# ESP-IDF generated config
+sdkconfig
+sdkconfig.old
+
+# IDE
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Dependencies (fetched by IDF package manager)
+managed_components/
+
+# Misc
+*.log
