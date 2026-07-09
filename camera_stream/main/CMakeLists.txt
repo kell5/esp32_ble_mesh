@@ -1,0 +1,23 @@
+idf_component_register(
+    SRCS
+        "camera_main.c"
+        "app_wifi.c"
+        "app_camera.c"
+        "app_httpd.c"
+        "app_mqtt.c"
+        "app_relay.c"
+        "app_doorbell.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_wifi
+        esp_event
+        esp_netif
+        nvs_flash
+        esp_http_server
+        esp_timer
+        esp_driver_gpio
+        lwip
+        mqtt
+        esp32-camera
+        network_provisioning
+)

@@ -1,0 +1,45 @@
+# ===== ESP-IDF =====
+**/build/
+sdkconfig
+sdkconfig.old
+**/managed_components/
+
+# ===== Flutter / Dart =====
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/build/
+app/.pub-cache/
+app/generated_plugin_registrant.dart
+
+# Android
+app/android/.gradle/
+app/android/local.properties
+app/android/key.properties
+app/android/app/debug/
+app/android/app/profile/
+app/android/app/release/
+**/.cxx/
+
+# iOS / macOS
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Flutter.podspec
+app/macos/Pods/
+
+# ===== Editors / tooling / misc =====
+.vscode/
+.idea/
+.reasonix/
+.devin-bridge/
+.DS_Store
+*.log
+*.out.log
+
+# ===== dev/debug helpers & scratch (local only, not committed) =====
+/*.ps1
+/*.py
+/*.png
+app/*.png
