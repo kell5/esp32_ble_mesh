@@ -1,0 +1,4 @@
+# ESP32 WROOM Mesh node build override (COM6).
+# Brownout detector disabled as a fallback for marginal USB power on this bench node.
+# WARNING: removes under-voltage flash protection; only for the node build, gateway (S3) unaffected.
+CONFIG_ESP_BROWNOUT_DET=n
