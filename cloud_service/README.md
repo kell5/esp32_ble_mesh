@@ -164,7 +164,21 @@ curl http://127.0.0.1:8000/health
 
 SQLite 数据保存在命名卷 `cloud_data`（容器内 `/data`），升级重建容器不丢数据。`CLOUD_API_HOST` 在容器内固定为 `0.0.0.0`，由 compose 的端口映射对外暴露。
 
-公网暴露务必加 TLS：用 Nginx/Caddy 反代到容器的 8000 端口，并只放行反代端口。App 登录时"云端地址"填反代后的 `https://你的域名`。
+公网暴露务必加 TLS：在 `.env` 里设 `CLOUD_BIND_ADDR=127.0.0.1`，让容器只监听本机 8000，再用 Nginx/Caddy 反代到它并只放行 443。App 登录时"云端地址"填反代后的 `https://你的域名`（可带子路径，如 `https://你的域名/cloud`）。
+
+Nginx 反代示例（子路径 `/cloud/` → 本机 8000，`proxy_pass` 末尾斜杠会剥掉前缀）：
+
+```nginx
+location ^~ /cloud/ {
+    proxy_pass http://127.0.0.1:8000/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 60s;
+}
+```
 
 不要把真实 `.env` 提交到仓库（已在忽略之列）；broker 凭据、`CLOUD_API_TOKEN` 都应作为服务器上的密钥管理。
 

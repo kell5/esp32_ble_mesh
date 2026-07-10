@@ -9,8 +9,9 @@ services:
     container_name: mesh-cloud-service
     restart: unless-stopped
     ports:
-      # Host:Container. Put a TLS reverse proxy in front for public exposure.
-      - "${CLOUD_PUBLISH_PORT:-8000}:8000"
+      # Bind:Host:Container. Set CLOUD_BIND_ADDR=127.0.0.1 to expose only to a
+      # local TLS reverse proxy; leave 0.0.0.0 to publish directly.
+      - "${CLOUD_BIND_ADDR:-0.0.0.0}:${CLOUD_PUBLISH_PORT:-8000}:8000"
     environment:
       CLOUD_API_HOST: "0.0.0.0"
       CLOUD_API_PORT: "8000"
