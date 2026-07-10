@@ -143,6 +143,30 @@ class CloudApiTest(unittest.TestCase):
         self.assertTrue(shadow["reported"]["online"])
         self.assertEqual(shadow["reported"]["last_event"], "ringing")
 
+    def test_doorbell_events_are_recorded_and_listable(self) -> None:
+        bridge = self.app.state.mqtt_bridge
+        bridge.ingest(
+            "doorbell/door-001/event",
+            json.dumps({"version": 1, "message_id": "evt-1", "event": "ringing"}).encode(),
+        )
+        bridge.ingest(
+            "doorbell/door-001/event",
+            json.dumps({"version": 1, "message_id": "evt-2", "event": "stream_stop"}).encode(),
+        )
+        # Duplicate message_id must be ignored (idempotent).
+        bridge.ingest(
+            "doorbell/door-001/event",
+            json.dumps({"version": 1, "message_id": "evt-1", "event": "ringing"}).encode(),
+        )
+
+        events = self.client.get(
+            "/api/v1/devices/door-001/events", headers=self.headers
+        )
+        self.assertEqual(events.status_code, 200, events.text)
+        body = events.json()
+        self.assertEqual([item["event"] for item in body], ["stream_stop", "ringing"])
+        self.assertEqual(body[0]["payload"]["event"], "stream_stop")
+
     def test_mutation_requires_token_when_configured(self) -> None:
         response = self.client.post(
             "/api/v1/devices",

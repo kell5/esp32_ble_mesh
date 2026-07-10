@@ -261,3 +261,7 @@ class MqttBridge:
             message_id=message_id,
             offline_reason=None,
         )
+        payload: dict[str, JsonValue] = {"event": event}
+        if version is not None:
+            payload["version"] = version
+        self._store.record_event(doorbell_id, event, payload, message_id=message_id)

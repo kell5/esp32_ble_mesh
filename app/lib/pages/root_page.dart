@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/services.dart';
 
 import '../services/doorbell_notification_service.dart';
 import '../services/mqtt_service.dart';
@@ -104,32 +105,99 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
 }
 
 /// Bottom tab bar: the local MQTT device home and the cloud device registry.
-class _MainTabs extends StatelessWidget {
+///
+/// The Android system back button is handled explicitly so it never quits the
+/// app on the first press: it first pops any pushed page inside the active
+/// tab, then falls back to the first tab, and only then asks to exit.
+class _MainTabs extends StatefulWidget {
   const _MainTabs({required this.mqtt});
 
   final MqttService mqtt;
 
   @override
-  Widget build(BuildContext context) {
-    return CupertinoTabScaffold(
-      tabBar: CupertinoTabBar(
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(CupertinoIcons.house_fill),
-            label: '我的设备',
+  State<_MainTabs> createState() => _MainTabsState();
+}
+
+class _MainTabsState extends State<_MainTabs> {
+  final CupertinoTabController _tab = CupertinoTabController();
+  final List<GlobalKey<NavigatorState>> _navKeys = [
+    GlobalKey<NavigatorState>(),
+    GlobalKey<NavigatorState>(),
+  ];
+
+  @override
+  void dispose() {
+    _tab.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleBack() async {
+    final navigator = _navKeys[_tab.index].currentState;
+    if (navigator != null && navigator.canPop()) {
+      navigator.pop();
+      return;
+    }
+    if (_tab.index != 0) {
+      setState(() => _tab.index = 0);
+      return;
+    }
+    final shouldExit = await _confirmExit();
+    if (shouldExit) await SystemNavigator.pop();
+  }
+
+  Future<bool> _confirmExit() async {
+    final result = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (dialogContext) => CupertinoAlertDialog(
+        title: const Text('退出应用'),
+        content: const Text('确定要退出吗？'),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
           ),
-          BottomNavigationBarItem(
-            icon: Icon(CupertinoIcons.cloud_fill),
-            label: '云端',
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('退出'),
           ),
         ],
       ),
-      tabBuilder: (context, index) {
-        return CupertinoTabView(
-          builder: (_) =>
-              index == 0 ? HomePage(mqtt: mqtt) : const CloudDevicesPage(),
-        );
+    );
+    return result ?? false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _handleBack();
       },
+      child: CupertinoTabScaffold(
+        controller: _tab,
+        tabBar: CupertinoTabBar(
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(CupertinoIcons.house_fill),
+              label: '我的设备',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(CupertinoIcons.cloud_fill),
+              label: '云端',
+            ),
+          ],
+        ),
+        tabBuilder: (context, index) {
+          return CupertinoTabView(
+            navigatorKey: _navKeys[index],
+            builder: (_) => index == 0
+                ? HomePage(mqtt: widget.mqtt)
+                : const CloudDevicesPage(),
+          );
+        },
+      ),
     );
   }
 }

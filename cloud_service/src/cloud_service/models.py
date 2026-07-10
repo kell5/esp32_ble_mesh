@@ -8,10 +8,33 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 DEVICE_ID_PATTERN = r"^[A-Za-z0-9._:-]{1,96}$"
 USER_ID_PATTERN = r"^[A-Za-z0-9._:@-]{1,96}$"
 TYPE_PATTERN = r"^[a-z][a-z0-9_]{0,47}$"
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class RegisterAccountRequest(ApiModel):
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=128)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class LoginRequest(ApiModel):
+    email: str = Field(pattern=EMAIL_PATTERN, max_length=128)
+    password: str = Field(min_length=6, max_length=128)
+
+
+class AccountResponse(ApiModel):
+    user_id: str
+    email: str
+    created_at: datetime
+
+
+class AuthResponse(ApiModel):
+    user_id: str
+    email: str
+    token: str
 
 
 class RegisterDeviceRequest(ApiModel):
@@ -125,6 +148,15 @@ class SceneResponse(ApiModel):
     actions: list[SceneAction]
     created_at: datetime
     updated_at: datetime
+
+
+class DeviceEventResponse(ApiModel):
+    event_id: int
+    device_id: str
+    event: str
+    payload: dict[str, JsonValue]
+    message_id: str | None
+    created_at: datetime
 
 
 class CommandResult(ApiModel):

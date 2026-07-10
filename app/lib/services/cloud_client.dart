@@ -123,13 +123,33 @@ class CloudDeviceView {
   bool get isControllable => device.deviceType.isControllable;
 }
 
-/// Thin REST client for the Phase B cloud service. All mutating and listing
-/// endpoints require the `X-Cloud-Token` header when the server is configured
-/// with `CLOUD_API_TOKEN`.
+/// The identity returned by `POST /auth/register` and `POST /auth/login`.
+class CloudAuth {
+  const CloudAuth({required this.userId, required this.email, required this.token});
+
+  final String userId;
+  final String email;
+  final String token;
+
+  static CloudAuth? fromJson(Map<String, dynamic> j) {
+    final userId = j['user_id'];
+    final token = j['token'];
+    if (userId is! String || token is! String) return null;
+    return CloudAuth(
+      userId: userId,
+      email: (j['email'] as String?) ?? '',
+      token: token,
+    );
+  }
+}
+
+/// Thin REST client for the Phase B cloud service. Auth endpoints
+/// (`/auth/*`) are anonymous; every other call is authorized with the
+/// per-user bearer [token] returned by register/login.
 class CloudClient {
   CloudClient({
     required this.baseUrl,
-    required this.token,
+    this.token = '',
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
@@ -141,7 +161,7 @@ class CloudClient {
 
   Map<String, String> get _headers => {
     'Content-Type': 'application/json',
-    if (token.isNotEmpty) 'X-Cloud-Token': token,
+    if (token.isNotEmpty) 'Authorization': 'Bearer $token',
   };
 
   Uri _uri(String path) {
@@ -156,12 +176,30 @@ class CloudClient {
     return response.statusCode == 200;
   }
 
-  Future<List<CloudDevice>> listDevices(String userId) async {
+  Future<CloudAuth> register(String email, String password) =>
+      _authCall('/api/v1/auth/register', email, password);
+
+  Future<CloudAuth> login(String email, String password) =>
+      _authCall('/api/v1/auth/login', email, password);
+
+  Future<CloudAuth> _authCall(String path, String email, String password) async {
     final response = await _send(
-      () => _http.get(
-        _uri('/api/v1/users/${Uri.encodeComponent(userId)}/devices'),
-        headers: _headers,
+      () => _http.post(
+        _uri(path),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email, 'password': password}),
       ),
+    );
+    _ensureOk(response);
+    final decoded = jsonDecode(response.body);
+    final auth = decoded is Map<String, dynamic> ? CloudAuth.fromJson(decoded) : null;
+    if (auth == null) throw CloudApiException('云端返回了异常的响应');
+    return auth;
+  }
+
+  Future<List<CloudDevice>> listDevices() async {
+    final response = await _send(
+      () => _http.get(_uri('/api/v1/me/devices'), headers: _headers),
     );
     _ensureOk(response);
     final decoded = jsonDecode(response.body);
@@ -171,6 +209,21 @@ class CloudClient {
         .map(CloudDevice.fromJson)
         .whereType<CloudDevice>()
         .toList();
+  }
+
+  /// Claim an existing (auto-registered) device to the logged-in account.
+  Future<CloudDevice> claimDevice(String deviceId) async {
+    final response = await _send(
+      () => _http.post(
+        _uri('/api/v1/me/devices/${Uri.encodeComponent(deviceId)}/claim'),
+        headers: _headers,
+      ),
+    );
+    _ensureOk(response);
+    final decoded = jsonDecode(response.body);
+    final device = decoded is Map<String, dynamic> ? CloudDevice.fromJson(decoded) : null;
+    if (device == null) throw CloudApiException('云端返回了异常的响应');
+    return device;
   }
 
   Future<CloudShadow?> getShadow(String deviceId) async {
@@ -186,9 +239,9 @@ class CloudClient {
     return decoded is Map<String, dynamic> ? CloudShadow.fromJson(decoded) : null;
   }
 
-  /// Fetch every device for [userId] along with its shadow (concurrently).
-  Future<List<CloudDeviceView>> listDeviceViews(String userId) async {
-    final devices = await listDevices(userId);
+  /// Fetch every device owned by the logged-in account with its shadow.
+  Future<List<CloudDeviceView>> listDeviceViews() async {
+    final devices = await listDevices();
     final shadows = await Future.wait(
       devices.map((d) async {
         try {
@@ -235,14 +288,27 @@ class CloudClient {
   }
 
   void _ensureOk(http.Response response) {
-    if (response.statusCode >= 200 && response.statusCode < 300) return;
-    if (response.statusCode == 401) {
-      throw CloudApiException('鉴权失败：API Token 不正确', statusCode: 401);
+    final code = response.statusCode;
+    if (code >= 200 && code < 300) return;
+    final detail = _detail(response);
+    final message = switch (code) {
+      401 => detail ?? '登录已失效，请重新登录',
+      403 => detail ?? '无权访问该设备（可能属于其它账号）',
+      404 => detail ?? '设备不存在（请确认设备已上线并上报云端）',
+      409 => detail ?? '设备已被其它账号认领',
+      _ => detail ?? 'HTTP $code: ${response.reasonPhrase ?? ''}',
+    };
+    throw CloudApiException(message, statusCode: code);
+  }
+
+  String? _detail(http.Response response) {
+    try {
+      final decoded = jsonDecode(response.body);
+      final detail = decoded is Map<String, dynamic> ? decoded['detail'] : null;
+      return detail is String && detail.isNotEmpty ? detail : null;
+    } catch (_) {
+      return null;
     }
-    throw CloudApiException(
-      'HTTP ${response.statusCode}: ${response.reasonPhrase ?? ''}',
-      statusCode: response.statusCode,
-    );
   }
 
   void close() => _http.close();

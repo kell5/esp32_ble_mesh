@@ -14,7 +14,9 @@
 - 设备分组：多对多集合，支持整组下发一次 `desired` 命令。
 - 场景：一组设备的 `desired` 快照，激活时批量下发。
 - 自动化：`触发 → 动作` 规则，`reported` 字段命中条件时执行动作（下发设备/整组/激活场景）。
-- 可选 `X-Cloud-Token` API 保护；默认只监听 `127.0.0.1`。
+- 邮箱账号体系（demo 级）：注册/登录换取 per-user Bearer token；每个账号是独立设备空间，只能访问自己认领的设备。
+- 门铃事件记录：门铃 `event` 主题落库，支持按设备/按账号分页查询（`message_id` 幂等去重）。
+- 可选 `X-Cloud-Token` 共享密钥（管理/设备置备用）；默认只监听 `127.0.0.1`。
 
 ## MQTT 兼容映射
 
@@ -57,19 +59,46 @@ $env:CLOUD_MQTT_PASSWORD = "set-in-secret-manager"
 
 ## API
 
-配置 `CLOUD_API_TOKEN` 后，除 `/health` 外的 API 均需要请求头 `X-Cloud-Token`。
+两种鉴权方式并存：
+
+- **共享密钥 `X-Cloud-Token`**（配置 `CLOUD_API_TOKEN` 后）：用于设备置备与管理类接口（注册设备、`/api/v1/users/<user>/...`、房间/分组/场景/自动化），视为管理员。
+- **per-user Bearer token**：注册/登录得到，请求头 `Authorization: Bearer <token>`。用于终端用户访问自己的设备（`/api/v1/me/...`、设备影子/事件）。带 Bearer 访问设备接口时强制校验设备归属，跨账号返回 403。
+
+`/health` 与 `/api/v1/auth/register`、`/api/v1/auth/login` 为匿名接口。
+
+### 账号与鉴权（demo 级）
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/api/v1/auth/register` | 邮箱+密码注册，返回 `{user_id,email,token}` |
+| `POST` | `/api/v1/auth/login` | 邮箱+密码登录，返回新 token |
+| `GET` | `/api/v1/auth/me` | 读取当前账号（需 Bearer） |
+| `POST` | `/api/v1/auth/logout` | 使当前 token 失效 |
+
+密码用标准库 PBKDF2-HMAC-SHA256（加随机盐）哈希，token 为不透明随机串。仅用于 demo，不含邮箱验证、找回密码、过期与限流。
 
 ### 设备与影子
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `GET` | `/health` | 服务与 MQTT 连接状态 |
-| `POST` | `/api/v1/devices` | 注册或刷新设备元数据 |
-| `POST` | `/api/v1/devices/<id>/claim` | 将未认领设备绑定到用户 |
-| `GET` | `/api/v1/users/<user>/devices` | 查询用户设备 |
-| `GET` | `/api/v1/devices/<id>/shadow` | 读取统一设备影子 |
-| `PATCH` | `/api/v1/devices/<id>/shadow/desired` | 合并期望状态并尝试下发 MQTT |
+| `POST` | `/api/v1/devices` | 注册或刷新设备元数据（管理员） |
+| `POST` | `/api/v1/devices/<id>/claim` | 将未认领设备绑定到指定用户（管理员） |
+| `GET` | `/api/v1/users/<user>/devices` | 查询指定用户设备（管理员） |
+| `GET` | `/api/v1/me/devices` | 查询当前账号设备（Bearer） |
+| `POST` | `/api/v1/me/devices/<id>/claim` | 将设备认领到当前账号（Bearer） |
+| `GET` | `/api/v1/devices/<id>/shadow` | 读取统一设备影子（归属校验） |
+| `PATCH` | `/api/v1/devices/<id>/shadow/desired` | 合并期望状态并尝试下发 MQTT（归属校验） |
 | `POST` | `/api/v1/devices/<id>/offline` | 记录明确离线原因 |
+
+### 门铃事件
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/v1/me/events` | 当前账号所有设备的事件（分页，Bearer） |
+| `GET` | `/api/v1/devices/<id>/events` | 指定设备的事件（分页，归属校验） |
+
+分页参数：`limit`（1–200，默认 50）、`before_id`（游标，取更早事件）。
 
 ### 房间
 
@@ -110,6 +139,17 @@ $env:CLOUD_MQTT_PASSWORD = "set-in-secret-manager"
 示例：
 
 ```bash
+# 账号：注册并拿到 per-user token（App 走这条路径）
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"me@example.com","password":"secret123"}' | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+
+# 用账号 token 认领设备并查询自己的设备
+curl -X POST http://127.0.0.1:8000/api/v1/me/devices/node-001/claim \
+  -H "Authorization: Bearer $TOKEN"
+curl http://127.0.0.1:8000/api/v1/me/devices -H "Authorization: Bearer $TOKEN"
+
+# 设备置备仍用共享密钥（管理员）
 curl -X POST http://127.0.0.1:8000/api/v1/devices \
   -H "X-Cloud-Token: replace-with-a-random-token" \
   -H "Content-Type: application/json" \
@@ -184,4 +224,4 @@ location ^~ /cloud/ {
 
 ## 后续边界
 
-当前 `user_id` 是设备归属模型，不等同于完整登录系统。公网部署前还需接入正式用户认证、TLS、broker ACL 和凭据轮换；App 端云列表/影子接入、固件 OTA 与门铃事件索引在后续切片实现。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。
+当前邮箱账号体系为 **demo 级**：token 不过期、无邮箱验证/找回密码/登录限流，密码哈希用标准库 PBKDF2。生产化前还需正式认证（如 JWT+刷新、过期与限流）、broker ACL 和凭据轮换。TLS 由自有服务器的 Nginx 反代提供（见上）。门铃事件仅记录事件元数据，尚无快照/媒体存储与索引；固件 OTA 未实现。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。

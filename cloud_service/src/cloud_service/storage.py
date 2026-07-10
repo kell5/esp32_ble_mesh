@@ -11,9 +11,11 @@ from typing import Iterator
 from pydantic import JsonValue
 
 from .models import (
+    AccountResponse,
     AutomationAction,
     AutomationResponse,
     AutomationTrigger,
+    DeviceEventResponse,
     DeviceResponse,
     GroupResponse,
     RoomResponse,
@@ -21,9 +23,22 @@ from .models import (
     SceneResponse,
     ShadowResponse,
 )
+from .security import hash_password, new_token, verify_password
 
 
 class DeviceNotFoundError(LookupError):
+    pass
+
+
+class AccountNotFoundError(LookupError):
+    pass
+
+
+class EmailAlreadyExistsError(RuntimeError):
+    pass
+
+
+class InvalidCredentialsError(RuntimeError):
     pass
 
 
@@ -194,6 +209,35 @@ class DeviceStore:
                 CREATE INDEX IF NOT EXISTS idx_automations_owner ON automations(owner_id);
                 CREATE INDEX IF NOT EXISTS idx_automations_trigger
                     ON automations(trigger_device_id);
+
+                CREATE TABLE IF NOT EXISTS device_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+                    event TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    message_id TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_events_device
+                    ON device_events(device_id, event_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_events_message
+                    ON device_events(device_id, message_id)
+                    WHERE message_id IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS accounts (
+                    user_id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS account_tokens (
+                    token TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES accounts(user_id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_account_tokens_user
+                    ON account_tokens(user_id);
                 """
             )
             columns = {
@@ -399,6 +443,134 @@ class DeviceStore:
                 )
                 marked.append(device_id)
         return marked
+
+    # --- accounts ----------------------------------------------------------
+
+    def create_account(self, email: str, password: str) -> AccountResponse:
+        now = _utc_now().isoformat()
+        user_id = _new_id("user")
+        normalized = email.strip().lower()
+        with self._connection() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO accounts(user_id, email, password_hash, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_id, normalized, hash_password(password), now),
+                )
+            except sqlite3.IntegrityError as error:
+                raise EmailAlreadyExistsError(normalized) from error
+            return self._account_from_row(
+                connection.execute(
+                    "SELECT * FROM accounts WHERE user_id = ?", (user_id,)
+                ).fetchone()
+            )
+
+    def issue_token(self, user_id: str) -> str:
+        now = _utc_now().isoformat()
+        token = new_token()
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO account_tokens(token, user_id, created_at) VALUES (?, ?, ?)",
+                (token, user_id, now),
+            )
+        return token
+
+    def authenticate(self, email: str, password: str) -> AccountResponse:
+        normalized = email.strip().lower()
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM accounts WHERE email = ?", (normalized,)
+            ).fetchone()
+            if row is None or not verify_password(password, str(row["password_hash"])):
+                raise InvalidCredentialsError(normalized)
+            return self._account_from_row(row)
+
+    def get_account(self, user_id: str) -> AccountResponse:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM accounts WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            if row is None:
+                raise AccountNotFoundError(user_id)
+            return self._account_from_row(row)
+
+    def resolve_token(self, token: str) -> str | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT user_id FROM account_tokens WHERE token = ?", (token,)
+            ).fetchone()
+            return None if row is None else str(row["user_id"])
+
+    def revoke_token(self, token: str) -> None:
+        with self._connection() as connection:
+            connection.execute("DELETE FROM account_tokens WHERE token = ?", (token,))
+
+    # --- events ------------------------------------------------------------
+
+    def record_event(
+        self,
+        device_id: str,
+        event: str,
+        payload: dict[str, JsonValue],
+        message_id: str | None = None,
+    ) -> DeviceEventResponse | None:
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            self._require_device(connection, device_id)
+            try:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO device_events(
+                        device_id, event, payload_json, message_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (device_id, event, _dump_object(payload), message_id, now),
+                )
+            except sqlite3.IntegrityError:
+                return None
+            return self._get_event(connection, int(cursor.lastrowid))
+
+    def list_device_events(
+        self, device_id: str, limit: int = 50, before_id: int | None = None
+    ) -> list[DeviceEventResponse]:
+        with self._connection() as connection:
+            self._require_device(connection, device_id)
+            if before_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM device_events WHERE device_id = ? "
+                    "ORDER BY event_id DESC LIMIT ?",
+                    (device_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM device_events WHERE device_id = ? AND event_id < ? "
+                    "ORDER BY event_id DESC LIMIT ?",
+                    (device_id, before_id, limit),
+                ).fetchall()
+            return [self._event_from_row(row) for row in rows]
+
+    def list_owner_events(
+        self, owner_id: str, limit: int = 50, before_id: int | None = None
+    ) -> list[DeviceEventResponse]:
+        with self._connection() as connection:
+            if before_id is None:
+                rows = connection.execute(
+                    "SELECT e.* FROM device_events e "
+                    "JOIN devices d ON d.device_id = e.device_id "
+                    "WHERE d.owner_id = ? ORDER BY e.event_id DESC LIMIT ?",
+                    (owner_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT e.* FROM device_events e "
+                    "JOIN devices d ON d.device_id = e.device_id "
+                    "WHERE d.owner_id = ? AND e.event_id < ? "
+                    "ORDER BY e.event_id DESC LIMIT ?",
+                    (owner_id, before_id, limit),
+                ).fetchall()
+            return [self._event_from_row(row) for row in rows]
 
     # --- rooms -------------------------------------------------------------
 
@@ -895,6 +1067,34 @@ class DeviceStore:
             VALUES (?, ?, ?, ?)
             """,
             (scope, message_id, device_id, now),
+        )
+
+    def _get_event(
+        self, connection: sqlite3.Connection, event_id: int
+    ) -> DeviceEventResponse:
+        row = connection.execute(
+            "SELECT * FROM device_events WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        return self._event_from_row(row)
+
+    @staticmethod
+    def _event_from_row(row: sqlite3.Row) -> DeviceEventResponse:
+        message_value = row["message_id"]
+        return DeviceEventResponse(
+            event_id=int(row["event_id"]),
+            device_id=str(row["device_id"]),
+            event=str(row["event"]),
+            payload=_load_object(str(row["payload_json"])),
+            message_id=None if message_value is None else str(message_value),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _account_from_row(row: sqlite3.Row) -> AccountResponse:
+        return AccountResponse(
+            user_id=str(row["user_id"]),
+            email=str(row["email"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
         )
 
     @staticmethod

@@ -5,24 +5,29 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 
 from .automation import AutomationEngine
 from .config import Settings
 from .models import (
+    AccountResponse,
     ApplyResponse,
+    AuthResponse,
     AutomationRequest,
     AutomationResponse,
     AutomationUpdateRequest,
     ClaimDeviceRequest,
     DesiredUpdateResponse,
+    DeviceEventResponse,
     DeviceResponse,
     GroupCommandRequest,
     GroupRequest,
     GroupResponse,
     GroupUpdateRequest,
     HealthResponse,
+    LoginRequest,
     OfflineRequest,
+    RegisterAccountRequest,
     RegisterDeviceRequest,
     RoomRequest,
     RoomResponse,
@@ -34,12 +39,15 @@ from .models import (
     ShadowResponse,
 )
 from .mqtt_bridge import MqttBridge
+from .security import Principal
 from .storage import (
     AutomationNotFoundError,
     DeviceAlreadyClaimedError,
     DeviceNotFoundError,
     DeviceStore,
+    EmailAlreadyExistsError,
     GroupNotFoundError,
+    InvalidCredentialsError,
     RoomNotFoundError,
     SceneNotFoundError,
 )
@@ -90,6 +98,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     authorization = Depends(authorize)
 
+    def get_principal(
+        authorization_header: Annotated[str | None, Header(alias="Authorization")] = None,
+        x_cloud_token: Annotated[str | None, Header()] = None,
+    ) -> Principal:
+        if authorization_header and authorization_header.lower().startswith("bearer "):
+            token = authorization_header[7:].strip()
+            user_id = store.resolve_token(token)
+            if user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer token"
+                )
+            return Principal(is_admin=False, user_id=user_id)
+        expected = active_settings.api_token
+        if expected is None or x_cloud_token == expected:
+            return Principal(is_admin=True)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+
+    def require_account(principal: Principal) -> str:
+        if principal.user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="requires user login"
+            )
+        return principal.user_id
+
+    def enforce_user(principal: Principal, user_id: str) -> None:
+        if not principal.is_admin and principal.user_id != user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+
+    def enforce_device(principal: Principal, device_id: str) -> DeviceResponse:
+        try:
+            device = store.get_device(device_id)
+        except DeviceNotFoundError as error:
+            raise missing_device(error) from error
+        if not principal.is_admin and device.owner_id != principal.user_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+        return device
+
     def missing_device(error: DeviceNotFoundError) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"device not found: {error}"
@@ -108,6 +153,107 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             mqtt_connected=bridge.connected,
         )
 
+    # --- auth --------------------------------------------------------------
+
+    @application.post(
+        "/api/v1/auth/register",
+        response_model=AuthResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def register_account(request: RegisterAccountRequest) -> AuthResponse:
+        try:
+            account = store.create_account(request.email, request.password)
+        except EmailAlreadyExistsError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="email already registered",
+            ) from error
+        token = store.issue_token(account.user_id)
+        return AuthResponse(user_id=account.user_id, email=account.email, token=token)
+
+    @application.post("/api/v1/auth/login", response_model=AuthResponse)
+    def login(request: LoginRequest) -> AuthResponse:
+        try:
+            account = store.authenticate(request.email, request.password)
+        except InvalidCredentialsError as error:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid email or password",
+            ) from error
+        token = store.issue_token(account.user_id)
+        return AuthResponse(user_id=account.user_id, email=account.email, token=token)
+
+    @application.get("/api/v1/auth/me", response_model=AccountResponse)
+    def whoami(
+        principal: Principal = Depends(get_principal),
+    ) -> AccountResponse:
+        user_id = require_account(principal)
+        return store.get_account(user_id)
+
+    @application.post("/api/v1/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+    def logout(
+        authorization_header: Annotated[str | None, Header(alias="Authorization")] = None,
+    ) -> Response:
+        if authorization_header and authorization_header.lower().startswith("bearer "):
+            store.revoke_token(authorization_header[7:].strip())
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # --- current-user device plane ----------------------------------------
+
+    @application.get(
+        "/api/v1/me/devices",
+        response_model=list[DeviceResponse],
+    )
+    def list_my_devices(
+        principal: Principal = Depends(get_principal),
+    ) -> list[DeviceResponse]:
+        return store.list_devices(require_account(principal))
+
+    @application.post(
+        "/api/v1/me/devices/{device_id}/claim",
+        response_model=DeviceResponse,
+    )
+    def claim_my_device(
+        device_id: str,
+        principal: Principal = Depends(get_principal),
+    ) -> DeviceResponse:
+        user_id = require_account(principal)
+        try:
+            return store.claim_device(device_id, user_id)
+        except DeviceNotFoundError as error:
+            raise missing_device(error) from error
+        except DeviceAlreadyClaimedError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="device already claimed by another account",
+            ) from error
+
+    @application.get(
+        "/api/v1/me/events",
+        response_model=list[DeviceEventResponse],
+    )
+    def list_my_events(
+        principal: Principal = Depends(get_principal),
+        limit: int = Query(default=50, ge=1, le=200),
+        before_id: int | None = Query(default=None, ge=1),
+    ) -> list[DeviceEventResponse]:
+        return store.list_owner_events(require_account(principal), limit, before_id)
+
+    @application.get(
+        "/api/v1/devices/{device_id}/events",
+        response_model=list[DeviceEventResponse],
+    )
+    def list_device_events(
+        device_id: str,
+        principal: Principal = Depends(get_principal),
+        limit: int = Query(default=50, ge=1, le=200),
+        before_id: int | None = Query(default=None, ge=1),
+    ) -> list[DeviceEventResponse]:
+        enforce_device(principal, device_id)
+        return store.list_device_events(device_id, limit, before_id)
+
+    # --- devices -----------------------------------------------------------
+
     @application.post(
         "/api/v1/devices",
         response_model=DeviceResponse,
@@ -122,13 +268,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.get(
         "/api/v1/devices/{device_id}",
         response_model=DeviceResponse,
-        dependencies=[authorization],
     )
-    def get_device(device_id: str) -> DeviceResponse:
-        try:
-            return store.get_device(device_id)
-        except DeviceNotFoundError as error:
-            raise missing_device(error) from error
+    def get_device(
+        device_id: str,
+        principal: Principal = Depends(get_principal),
+    ) -> DeviceResponse:
+        return enforce_device(principal, device_id)
 
     @application.post(
         "/api/v1/devices/{device_id}/claim",
@@ -157,24 +302,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.get(
         "/api/v1/devices/{device_id}/shadow",
         response_model=ShadowResponse,
-        dependencies=[authorization],
     )
-    def get_shadow(device_id: str) -> ShadowResponse:
-        try:
-            return store.get_shadow(device_id)
-        except DeviceNotFoundError as error:
-            raise missing_device(error) from error
+    def get_shadow(
+        device_id: str,
+        principal: Principal = Depends(get_principal),
+    ) -> ShadowResponse:
+        enforce_device(principal, device_id)
+        return store.get_shadow(device_id)
 
     @application.patch(
         "/api/v1/devices/{device_id}/shadow/desired",
         response_model=DesiredUpdateResponse,
-        dependencies=[authorization],
     )
-    def update_desired(device_id: str, request: ShadowPatchRequest) -> DesiredUpdateResponse:
-        try:
-            shadow, changed = store.update_desired(device_id, request.state, request.message_id)
-        except DeviceNotFoundError as error:
-            raise missing_device(error) from error
+    def update_desired(
+        device_id: str,
+        request: ShadowPatchRequest,
+        principal: Principal = Depends(get_principal),
+    ) -> DesiredUpdateResponse:
+        enforce_device(principal, device_id)
+        shadow, changed = store.update_desired(device_id, request.state, request.message_id)
         published = changed and bridge.publish_desired(device_id, request.state)
         return DesiredUpdateResponse(shadow=shadow, changed=changed, published=published)
 

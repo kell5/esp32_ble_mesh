@@ -3,10 +3,9 @@ import 'package:flutter/cupertino.dart';
 import '../services/cloud_client.dart';
 import '../services/cloud_session.dart';
 
-/// Lightweight cloud login: the user enters the service base URL, the optional
-/// API token and their user id. On success the session is persisted and
-/// returned to the caller. This intentionally has no password step — the cloud
-/// service has no account system yet (see [CloudSession]).
+/// Email account gate for the cloud tab. The user enters the service base URL
+/// plus an email + password, and either registers a new account or logs in.
+/// On success a per-user bearer token is persisted in [CloudSession].
 class CloudLoginPage extends StatefulWidget {
   const CloudLoginPage({super.key, required this.session});
 
@@ -18,38 +17,47 @@ class CloudLoginPage extends StatefulWidget {
 
 class _CloudLoginPageState extends State<CloudLoginPage> {
   late final TextEditingController _baseUrl;
-  late final TextEditingController _token;
-  late final TextEditingController _userId;
+  late final TextEditingController _email;
+  late final TextEditingController _password;
 
+  bool _register = false;
   bool _busy = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _baseUrl = TextEditingController(text: widget.session.baseUrl);
-    _token = TextEditingController(text: widget.session.token);
-    _userId = TextEditingController(text: widget.session.userId);
+    _baseUrl = TextEditingController(
+      text: widget.session.baseUrl.isEmpty
+          ? 'https://lk-mcu.online/cloud'
+          : widget.session.baseUrl,
+    );
+    _email = TextEditingController(text: widget.session.email);
+    _password = TextEditingController();
   }
 
   @override
   void dispose() {
     _baseUrl.dispose();
-    _token.dispose();
-    _userId.dispose();
+    _email.dispose();
+    _password.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     final baseUrl = _baseUrl.text.trim();
-    final userId = _userId.text.trim();
-    final token = _token.text.trim();
-    if (baseUrl.isEmpty || userId.isEmpty) {
-      setState(() => _error = '请填写云端地址和用户 ID');
+    final email = _email.text.trim();
+    final password = _password.text;
+    if (baseUrl.isEmpty || email.isEmpty || password.isEmpty) {
+      setState(() => _error = '请填写云端地址、邮箱和密码');
       return;
     }
     if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
       setState(() => _error = '云端地址需以 http:// 或 https:// 开头');
+      return;
+    }
+    if (password.length < 6) {
+      setState(() => _error = '密码至少 6 位');
       return;
     }
 
@@ -58,14 +66,16 @@ class _CloudLoginPageState extends State<CloudLoginPage> {
       _error = null;
     });
 
-    final client = CloudClient(baseUrl: baseUrl, token: token);
+    final client = CloudClient(baseUrl: baseUrl);
     try {
-      // Verify reachability and that the token lists devices without 401.
-      await client.listDevices(userId);
+      final auth = _register
+          ? await client.register(email, password)
+          : await client.login(email, password);
       widget.session
         ..baseUrl = baseUrl
-        ..token = token
-        ..userId = userId;
+        ..token = auth.token
+        ..userId = auth.userId
+        ..email = auth.email;
       await widget.session.save();
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -82,27 +92,51 @@ class _CloudLoginPageState extends State<CloudLoginPage> {
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
       backgroundColor: CupertinoColors.systemGroupedBackground,
-      navigationBar: const CupertinoNavigationBar(middle: Text('登录云端')),
+      navigationBar: CupertinoNavigationBar(
+        middle: Text(_register ? '注册账号' : '登录云端'),
+      ),
       child: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            CupertinoSlidingSegmentedControl<bool>(
+              groupValue: _register,
+              onValueChanged: (value) {
+                if (_busy || value == null) return;
+                setState(() {
+                  _register = value;
+                  _error = null;
+                });
+              },
+              children: const {
+                false: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 6),
+                  child: Text('登录'),
+                ),
+                true: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 6),
+                  child: Text('注册'),
+                ),
+              },
+            ),
+            const SizedBox(height: 18),
             _field(
               controller: _baseUrl,
-              placeholder: 'https://your-cloud-host',
+              placeholder: 'https://lk-mcu.online/cloud',
               label: '云端地址',
               keyboardType: TextInputType.url,
             ),
             _field(
-              controller: _token,
-              placeholder: '未配置可留空',
-              label: 'API Token',
-              obscure: true,
+              controller: _email,
+              placeholder: 'you@example.com',
+              label: '邮箱',
+              keyboardType: TextInputType.emailAddress,
             ),
             _field(
-              controller: _userId,
-              placeholder: 'user-001',
-              label: '用户 ID',
+              controller: _password,
+              placeholder: '至少 6 位',
+              label: '密码',
+              obscure: true,
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
@@ -119,17 +153,14 @@ class _CloudLoginPageState extends State<CloudLoginPage> {
               onPressed: _busy ? null : _submit,
               child: _busy
                   ? const CupertinoActivityIndicator()
-                  : const Text('登录并同步设备'),
+                  : Text(_register ? '注册并登录' : '登录'),
             ),
             const Padding(
               padding: EdgeInsets.fromLTRB(4, 18, 4, 0),
               child: Text(
-                '登录信息仅保存在本机，用于访问该用户名下已认领的云端设备与影子状态。'
-                '云端暂无账号密码体系，用户 ID 即设备归属标识。',
-                style: TextStyle(
-                  color: CupertinoColors.systemGrey,
-                  fontSize: 12,
-                ),
+                '每个账号是独立的设备空间：登录后在“云端”页添加（认领）属于你的设备，'
+                '之后无需连接硬件即可远程查看与控制。登录凭据仅保存在本机。',
+                style: TextStyle(color: CupertinoColors.systemGrey, fontSize: 12),
               ),
             ),
           ],

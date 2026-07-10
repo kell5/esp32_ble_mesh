@@ -62,7 +62,7 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
       _error = null;
     });
     try {
-      final views = await client.listDeviceViews(session.userId);
+      final views = await client.listDeviceViews();
       if (!mounted) return;
       setState(() {
         _devices = views;
@@ -119,6 +119,66 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
     }
   }
 
+  Future<void> _addDevice() async {
+    final client = _client;
+    if (client == null) return;
+    final controller = TextEditingController();
+    final deviceId = await showCupertinoDialog<String>(
+      context: context,
+      builder: (dialogContext) => CupertinoAlertDialog(
+        title: const Text('添加设备'),
+        content: Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '输入设备 ID 将其认领到当前账号。设备需已上电并上报云端。',
+                style: TextStyle(fontSize: 12, color: CupertinoColors.systemGrey),
+              ),
+              const SizedBox(height: 12),
+              CupertinoTextField(
+                controller: controller,
+                placeholder: '如 node-0B55C0 / door-001',
+                autofocus: true,
+                autocorrect: false,
+                enableSuggestions: false,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          CupertinoDialogAction(
+            isDefaultAction: true,
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('添加'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (deviceId == null || deviceId.isEmpty) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await client.claimDevice(deviceId);
+      await _refresh();
+    } on CloudApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    }
+  }
+
   void _openDetail(CloudDeviceView view) {
     final client = _client;
     if (client == null) return;
@@ -143,10 +203,20 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
       navigationBar: CupertinoNavigationBar(
         middle: const Text('云端设备'),
         trailing: loggedIn
-            ? CupertinoButton(
-                padding: EdgeInsets.zero,
-                onPressed: _showAccountSheet,
-                child: const Icon(CupertinoIcons.person_crop_circle),
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: _addDevice,
+                    child: const Icon(CupertinoIcons.add_circled),
+                  ),
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: _showAccountSheet,
+                    child: const Icon(CupertinoIcons.person_crop_circle),
+                  ),
+                ],
               )
             : null,
       ),
@@ -270,9 +340,14 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
           ),
           const SizedBox(height: 6),
           const Text(
-            '设备上报到云端并被认领后会出现在这里。下拉可刷新。',
+            '点右上角“+”输入设备 ID 认领设备（设备需已上电并上报云端）。下拉可刷新。',
             textAlign: TextAlign.center,
             style: TextStyle(color: CupertinoColors.systemGrey, fontSize: 12),
+          ),
+          const SizedBox(height: 16),
+          CupertinoButton.filled(
+            onPressed: _addDevice,
+            child: const Text('添加设备'),
           ),
         ],
       ),
@@ -317,14 +392,24 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
         title: const Text('云端账户'),
         message: session == null
             ? null
-            : Text('${session.userId} @ ${session.baseUrl}'),
+            : Text(
+                '${session.email.isEmpty ? session.userId : session.email}\n'
+                '${session.baseUrl}',
+              ),
         actions: [
+          CupertinoActionSheetAction(
+            onPressed: () {
+              Navigator.of(sheetContext).pop();
+              _addDevice();
+            },
+            child: const Text('添加设备'),
+          ),
           CupertinoActionSheetAction(
             onPressed: () {
               Navigator.of(sheetContext).pop();
               _login();
             },
-            child: const Text('切换 / 修改连接'),
+            child: const Text('切换账号 / 修改地址'),
           ),
           CupertinoActionSheetAction(
             isDestructiveAction: true,
