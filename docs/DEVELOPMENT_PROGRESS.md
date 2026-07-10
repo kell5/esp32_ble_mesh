@@ -167,16 +167,21 @@ Flutter App
 
 详细文件映射、协议示例和测试步骤见 [DEVICE_ASSET_STATUS.md](DEVICE_ASSET_STATUS.md)。
 
-### Phase B：云端设备模型 — 未开始
+### Phase B：云端设备模型 — 首个纵向切片完成
 
-计划内容：
-
-- [ ] 设备注册与用户绑定。
-- [ ] 统一设备影子（desired/reported）。
-- [ ] MQTT LWT、离线原因、消息版本和幂等。
+- [x] 新增 `cloud_service/`：FastAPI + SQLite 本地优先服务。
+- [x] 设备注册、未认领设备绑定用户、按用户查询设备。
+- [x] 统一设备影子（`desired/reported`）、独立版本号和 `message_id` 幂等。
+- [x] 兼容现有 Mesh 节点、网关和门铃 MQTT 状态主题，不修改既有主题语义。
+- [x] `desired.on`/`desired.command` 转换为现有节点和门铃控制主题。
+- [x] 云端超时离线与明确 `offline_reason`。
+- [ ] 固件 MQTT LWT、消息版本/消息 ID 原生上报和 broker ACL。
+- [ ] App 登录、云端设备列表和影子状态接入。
 - [ ] 房间、分组、场景和自动化规则。
 - [ ] 固件 OTA、版本管理、灰度与回滚。
 - [ ] 门铃事件记录、快照索引和权限控制。
+
+运行、API、环境变量和兼容主题见 [`cloud_service/README.md`](../cloud_service/README.md)。
 
 ### Phase C：Matter over WiFi 简历演示 — 未开始
 
@@ -193,12 +198,13 @@ Flutter App
 
 ## 7. 最近构建结果（2026-07-10）
 
-> Phase A-4 图标与设备类型改动已于 2026-07-10 重新完成 Flutter、网关和节点构建验证。
+> Phase A-4 已完成 Flutter、固件和手机布局验证；Phase B 首个云端设备模型切片已通过静态检查与本地 API 测试。
 
 | 目标 | 结果 | 产物/备注 |
 |---|---|---|
 | Flutter analyze | 通过，0 issues | `app/` |
 | Flutter debug APK | 通过 | `app/build/app/outputs/flutter-apk/app-debug.apk` |
+| Cloud service | Ruff 通过；7 个 API/影子测试通过 | `cloud_service/` |
 | 门铃 ESP32-S3 | 通过 | `camera_stream/build/`；并行编译曾触发编译器异常，`ninja -j1` 可稳定通过 |
 | Mesh 网关 ESP32-S3 | 通过 | `internal_communication/build-gateway/` |
 | Mesh 节点 ESP32 | 通过 | `internal_communication/build-node/`；app 分区只剩约 1%，需关注 |

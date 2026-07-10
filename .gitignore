@@ -30,6 +30,15 @@ app/ios/Flutter/Flutter.framework
 app/ios/Flutter/Flutter.podspec
 app/macos/Pods/
 
+# ===== Python cloud service =====
+cloud_service/.venv/
+cloud_service/src/*.egg-info/
+cloud_service/.env
+cloud_service/data/
+cloud_service/**/*.db*
+**/__pycache__/
+*.py[cod]
+
 # ===== Editors / tooling / misc =====
 .vscode/
 .idea/
