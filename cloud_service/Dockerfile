@@ -1,12 +1,13 @@
-# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 WORKDIR /app
 
 # Install the service from its package metadata (no dev/test extras).
+# PIP_INDEX_URL lets restricted networks point at a local PyPI mirror.
+ARG PIP_INDEX_URL=https://pypi.org/simple
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" .
 
 # Persist the SQLite database outside the image layer.
 ENV CLOUD_DATABASE_PATH=/data/cloud.db \

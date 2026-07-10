@@ -1,6 +1,10 @@
 services:
   cloud_service:
-    build: .
+    build:
+      context: .
+      args:
+        # Override in .env for restricted networks (e.g. a local PyPI mirror).
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
     image: mesh-cloud-service:latest
     container_name: mesh-cloud-service
     restart: unless-stopped
