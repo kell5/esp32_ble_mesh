@@ -14,7 +14,8 @@
 - `camera_stream/`：ESP32-S3 门铃、OV3660、IO0、MQTT、MJPEG 和中继推流。
 - `internal_communication/`：ESP-WIFI-MESH 网关与节点、MQTT 桥接、节点状态。
 - `server_relay/`：Python MJPEG 公网中继。
-- `docs/APP_DEVICE_ICON_PROMPTS.md`：App 各设备类型图标生成提示词。
+- `docs/APP_DEVICE_ICON_PROMPTS.md`：App 设备图标视觉规范。
+- `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成时可直接复制的完整提示词。
 
 ## 当前阶段
 

@@ -235,7 +235,7 @@ Flutter App
 
 新会话不要直接改代码，按顺序执行：
 
-1. 阅读本文件和 `docs/APP_DEVICE_ICON_PROMPTS.md`。
+1. 阅读本文件、`docs/APP_DEVICE_ICON_PROMPTS.md` 和 `docs/SINGLE_DEVICE_ICON_PROMPTS.md`。
 2. 执行 `git status --short`、`git branch --show-current`、`git log -1 --oneline`。
 3. 确认用户要继续的是 BLE 硬件验证、系统推送、Phase B、Matter，还是 UI 图标资源。
 4. 修改前阅读对应模块 README 和当前实现。
@@ -244,7 +244,8 @@ Flutter App
 ## 12. 文档索引
 
 - `docs/DEVELOPMENT_PROGRESS.md`：总进度和会话交接（本文件）。
-- `docs/APP_DEVICE_ICON_PROMPTS.md`：设备类型图标统一生成提示词。
+- `docs/APP_DEVICE_ICON_PROMPTS.md`：设备图标视觉规范与类型描述。
+- `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成的完整可复制提示词。
 - `camera_stream/README.md`：门铃摄像头与 MJPEG 链路。
 - `server_relay/README.md`：公网 MJPEG 中继部署。
 - `internal_communication/办公区灯控技术方案.md`：Mesh 灯控设计。
