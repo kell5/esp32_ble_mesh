@@ -44,6 +44,7 @@ from .storage import (
     AutomationNotFoundError,
     DeviceAlreadyClaimedError,
     DeviceNotFoundError,
+    DeviceNotOwnedError,
     DeviceStore,
     EmailAlreadyExistsError,
     GroupNotFoundError,
@@ -227,6 +228,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="device already claimed by another account",
             ) from error
+
+    @application.delete(
+        "/api/v1/me/devices/{device_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def unclaim_my_device(
+        device_id: str,
+        principal: Principal = Depends(get_principal),
+    ) -> Response:
+        user_id = require_account(principal)
+        try:
+            store.unclaim_device(device_id, user_id)
+        except DeviceNotFoundError as error:
+            raise missing_device(error) from error
+        except DeviceNotOwnedError as error:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="device not owned by this account",
+            ) from error
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @application.get(
         "/api/v1/me/events",

@@ -127,6 +127,36 @@ class AuthApiTest(unittest.TestCase):
         )
         self.assertEqual(conflict.status_code, 409, conflict.text)
 
+    def test_unclaim_removes_device_and_allows_reclaim(self) -> None:
+        token = self._register_account("erin@example.com")["token"]
+        self._provision_device("node-500")
+        self.client.post("/api/v1/me/devices/node-500/claim", headers=self._bearer(token))
+
+        removed = self.client.delete(
+            "/api/v1/me/devices/node-500", headers=self._bearer(token)
+        )
+        self.assertEqual(removed.status_code, 204, removed.text)
+
+        listing = self.client.get("/api/v1/me/devices", headers=self._bearer(token))
+        self.assertEqual(listing.json(), [])
+
+        # The device is unclaimed, so it can be claimed again (by anyone).
+        reclaim = self.client.post(
+            "/api/v1/me/devices/node-500/claim", headers=self._bearer(token)
+        )
+        self.assertEqual(reclaim.status_code, 200, reclaim.text)
+
+    def test_unclaim_foreign_device_is_forbidden(self) -> None:
+        owner = self._register_account("frank@example.com")["token"]
+        other = self._register_account("grace@example.com")["token"]
+        self._provision_device("node-600")
+        self.client.post("/api/v1/me/devices/node-600/claim", headers=self._bearer(owner))
+
+        forbidden = self.client.delete(
+            "/api/v1/me/devices/node-600", headers=self._bearer(other)
+        )
+        self.assertEqual(forbidden.status_code, 403, forbidden.text)
+
     def test_admin_token_still_has_access(self) -> None:
         self._provision_device("node-400")
         shadow = self.client.get(

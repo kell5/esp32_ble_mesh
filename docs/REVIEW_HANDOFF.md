@@ -22,8 +22,12 @@
   - **新增功能（本次实现，`cloud_devices_page.dart`）**：
     1. **添加设备自动发现 + 保留手动输入**：新增 `_AddDevicePage`，「自动发现（局域网）」列出 `MqttService.devicesSnapshot` 中未认领的 mesh 节点，一键 `claimDevice`；「手动添加」保留设备 ID 输入框；「全新设备」提供**一个**「蓝牙配网」按钮进入既有 `ProvisioningPage`。复用现有接口，无新增依赖。
     2. 空态引导文案同步更新为「自动发现 / 手动输入 / 蓝牙配网」。
-  - **阻塞项：App 内手动删除设备**（用户要求）——**无法仅在 `app/` 内实现**。查 `cloud_service/src/cloud_service/main.py`：设备平面只有 `GET /me/devices`、`POST /me/devices/{id}/claim`、`register/get/shadow`，**没有取消认领/删除设备端点**（`@app.delete` 仅 rooms/groups/scenes/automations）。真删除（含用户日后要回 door-001）必须先由后端提供 `DELETE /api/v1/me/devices/{id}`（或 unclaim）。待总指挥决策：①在 `cloud_service` 加此端点（超出「只改 app/」边界，需授权）；②App 仅做本地隐藏（不解除云端归属，无法要回设备，不推荐）。已在 App 侧预留位置，端点确定后接。
-  - 自检：`flutter analyze` = 0 问题；`flutter build apk --debug` PASS；返回键已真机验证通过。
+  - **手动删除设备（用户要求）——已端到端实现代码（规则放开后允许改 `cloud_service`）**：
+    - 后端新增 `DELETE /api/v1/me/devices/{device_id}`（`main.py`），账号鉴权后调用 `store.unclaim_device(device_id, user_id)`（`storage.py`：校验 owner 一致，否则 `DeviceNotOwnedError`→403；不存在→404；成功把 `owner_id` 置 NULL，设备仍注册在云端，可再次认领）。新增异常类 `DeviceNotOwnedError`。
+    - App 侧：`cloud_client.dart` 新增 `unclaimDevice(id)`（HTTP DELETE）；`smart_cards.dart` 的 `SmartCard` 新增 `onLongPress`；`cloud_devices_page.dart` 长按设备卡 → 操作表「移除设备（红色）/ 取消」→ 调 `unclaimDevice` 后刷新列表。
+    - 新增后端测试 2 条（`tests/test_auth.py`）：`test_unclaim_removes_device_and_allows_reclaim`、`test_unclaim_foreign_device_is_forbidden`。
+    - **⚠ 待部署**：线上 `lk-mcu.online/cloud` 尚未重新部署（与后端新协议一起），当前线上没有此端点，App 长按「移除」会收到 404/错误横幅，直到后端重新部署。用户日后「要回 door-001」也依赖此端点上线。
+  - 自检：`flutter analyze` = 0 问题；`flutter build apk --debug` PASS；返回键已真机验证通过；`cloud_service` `ruff check` 通过、`unittest` 34/34 通过（含新增 2 条 unclaim 测试）。
 
 ## 待修（阻塞，必须修复后重新构建再提交）
 **任务号：T-FW-CONTRACT-FIX（`internal_communication/main/mesh_main.c`，网关/根节点）**

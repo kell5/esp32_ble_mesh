@@ -17,6 +17,7 @@ class SmartCard extends StatelessWidget {
     this.online = true,
     this.trailing,
     this.onTap,
+    this.onLongPress,
   });
 
   final Widget leading;
@@ -25,6 +26,7 @@ class SmartCard extends StatelessWidget {
   final bool online;
   final Widget? trailing;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -32,6 +34,7 @@ class SmartCard extends StatelessWidget {
       opacity: online ? 1 : 0.55,
       child: GestureDetector(
         onTap: onTap,
+        onLongPress: onLongPress,
         behavior: HitTestBehavior.opaque,
         child: Container(
           padding: const EdgeInsets.all(14),

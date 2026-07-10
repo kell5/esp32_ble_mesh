@@ -259,8 +259,47 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
                       )
                     : null),
           onTap: () => _openDetail(view),
+          onLongPress: () => _confirmRemove(view),
         ),
     ];
+  }
+
+  /// Long-press a device card to remove (unclaim) it from the account.
+  void _confirmRemove(CloudDeviceView view) {
+    showCupertinoModalPopup<void>(
+      context: context,
+      builder: (sheetContext) => CupertinoActionSheet(
+        title: Text(view.device.displayName),
+        message: const Text('从当前账号移除该设备？设备本身不受影响，'
+            '之后可重新添加。'),
+        actions: [
+          CupertinoActionSheetAction(
+            isDestructiveAction: true,
+            onPressed: () {
+              Navigator.of(sheetContext).pop();
+              _removeDevice(view);
+            },
+            child: const Text('移除设备'),
+          ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.of(sheetContext).pop(),
+          child: const Text('取消'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _removeDevice(CloudDeviceView view) async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      await client.unclaimDevice(view.device.deviceId);
+      await _refresh();
+    } on CloudApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.message);
+    }
   }
 
   String _subtitle(CloudDeviceView view) {

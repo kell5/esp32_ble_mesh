@@ -46,6 +46,10 @@ class DeviceAlreadyClaimedError(RuntimeError):
     pass
 
 
+class DeviceNotOwnedError(RuntimeError):
+    pass
+
+
 class RoomNotFoundError(LookupError):
     pass
 
@@ -373,6 +377,21 @@ class DeviceStore:
                 (user_id, now, device_id),
             )
             return self._get_device(connection, device_id)
+
+    def unclaim_device(self, device_id: str, user_id: str) -> None:
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT owner_id FROM devices WHERE device_id = ?", (device_id,)
+            ).fetchone()
+            if row is None:
+                raise DeviceNotFoundError(device_id)
+            if row["owner_id"] != user_id:
+                raise DeviceNotOwnedError(device_id)
+            connection.execute(
+                "UPDATE devices SET owner_id = NULL, updated_at = ? WHERE device_id = ?",
+                (now, device_id),
+            )
 
     def get_device(self, device_id: str) -> DeviceResponse:
         with self._connection() as connection:
