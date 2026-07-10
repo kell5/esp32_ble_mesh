@@ -73,81 +73,44 @@ class _HomePageState extends State<HomePage> {
     widget.mqtt.setNodeLight(d.id, value);
     setState(() {
       _devices = _devices
-          .map((x) => x.id == d.id
-              ? LightDevice(
-                  id: x.id,
-                  on: value,
-                  online: x.online,
-                  layer: x.layer,
-                  role: x.role,
-                  type: x.type,
-                  name: x.name,
-                  value: x.value,
-                  updatedAt: x.updatedAt)
-              : x)
+          .map(
+            (x) => x.id == d.id
+                ? LightDevice(
+                    id: x.id,
+                    on: value,
+                    online: x.online,
+                    layer: x.layer,
+                    role: x.role,
+                    type: x.type,
+                    name: x.name,
+                    value: x.value,
+                    updatedAt: x.updatedAt,
+                  )
+                : x,
+          )
           .toList();
     });
   }
 
   void _openDoorbell() => Navigator.of(context).push(
-      CupertinoPageRoute<void>(builder: (_) => DoorbellPage(mqtt: widget.mqtt)));
+    CupertinoPageRoute<void>(builder: (_) => DoorbellPage(mqtt: widget.mqtt)),
+  );
 
-  void _openGateway() => Navigator.of(context).push(CupertinoPageRoute<void>(
-      builder: (_) => GatewayDetailPage(mqtt: widget.mqtt)));
+  void _openGateway() => Navigator.of(context).push(
+    CupertinoPageRoute<void>(
+      builder: (_) => GatewayDetailPage(mqtt: widget.mqtt),
+    ),
+  );
 
   void _openLight(LightDevice d) => Navigator.of(context).push(
-      CupertinoPageRoute<void>(
-          builder: (_) => LightDetailPage(mqtt: widget.mqtt, deviceId: d.id)));
+    CupertinoPageRoute<void>(
+      builder: (_) => LightDetailPage(mqtt: widget.mqtt, deviceId: d.id),
+    ),
+  );
 
-  void _addDevice() {
-    showCupertinoModalPopup<void>(
-      context: context,
-      builder: (ctx) => CupertinoActionSheet(
-        title: const Text('添加设备'),
-        message: const Text('让待配网设备进入配网模式，选择一种方式下发 WiFi。'),
-        actions: [
-          CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              Navigator.of(context).push(CupertinoPageRoute<void>(
-                  builder: (_) => const ProvisioningPage()));
-            },
-            child: const Text('手机配网（连设备热点下发 WiFi）'),
-          ),
-          CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _bleComingSoon();
-            },
-            child: const Text('BLE 配网（即将支持）'),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          isDefaultAction: true,
-          onPressed: () => Navigator.of(ctx).pop(),
-          child: const Text('取消'),
-        ),
-      ),
-    );
-  }
-
-  void _bleComingSoon() {
-    showCupertinoDialog<void>(
-      context: context,
-      builder: (ctx) => CupertinoAlertDialog(
-        title: const Text('BLE 统一配网'),
-        content: const Text(
-            '门铃 / 监控 / 网关 / 灯将共用同一套 BLE 加密配网流程（扫描→选设备→填 WiFi→自动连接）。\n设备侧固件接入后即可启用。'),
-        actions: [
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('好'),
-          ),
-        ],
-      ),
-    );
-  }
+  void _addDevice() => Navigator.of(
+    context,
+  ).push(CupertinoPageRoute<void>(builder: (_) => const ProvisioningPage()));
 
   @override
   Widget build(BuildContext context) {
@@ -168,8 +131,7 @@ class _HomePageState extends State<HomePage> {
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
               sliver: SliverGrid(
-                gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
@@ -184,7 +146,9 @@ class _HomePageState extends State<HomePage> {
                 child: Text(
                   '设备上电自动入网、自动发现；点任意设备进入其功能子页。以后新增控制机构/检测设备会自动作为新卡片出现。',
                   style: TextStyle(
-                      color: CupertinoColors.systemGrey, fontSize: 12),
+                    color: CupertinoColors.systemGrey,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             ),
@@ -205,36 +169,47 @@ class _HomePageState extends State<HomePage> {
         title: '门铃',
         subtitle: _connected ? '已连接' : '未连接',
         online: _connected,
-        trailing: const Icon(CupertinoIcons.chevron_forward,
-            size: 16, color: CupertinoColors.systemGrey3),
+        trailing: const Icon(
+          CupertinoIcons.chevron_forward,
+          size: 16,
+          color: CupertinoColors.systemGrey3,
+        ),
         onTap: _openDoorbell,
       ),
     ];
 
     for (final d in _devices) {
       final active = d.online && d.on && d.type.isControllable;
-      tiles.add(SmartCard(
-        icon: _iconFor(d),
-        iconColor: !d.online
-            ? CupertinoColors.systemGrey3
-            : (active
-                ? CupertinoColors.systemYellow
-                : CupertinoColors.systemGrey),
-        title: d.displayName,
-        subtitle: _subtitleFor(d),
-        online: d.online,
-        trailing: d.type.isControllable
-            ? PowerButton(
-                on: active, enabled: d.online, onPressed: () => _toggle(d))
-            : (d.value != null
-                ? Text(d.value!,
-                    style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: CupertinoColors.activeBlue))
-                : null),
-        onTap: () => _openLight(d),
-      ));
+      tiles.add(
+        SmartCard(
+          icon: _iconFor(d),
+          iconColor: !d.online
+              ? CupertinoColors.systemGrey3
+              : (active
+                    ? CupertinoColors.systemYellow
+                    : CupertinoColors.systemGrey),
+          title: d.displayName,
+          subtitle: _subtitleFor(d),
+          online: d.online,
+          trailing: d.type.isControllable
+              ? PowerButton(
+                  on: active,
+                  enabled: d.online,
+                  onPressed: () => _toggle(d),
+                )
+              : (d.value != null
+                    ? Text(
+                        d.value!,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: CupertinoColors.activeBlue,
+                        ),
+                      )
+                    : null),
+          onTap: () => _openLight(d),
+        ),
+      );
     }
     return tiles;
   }
@@ -289,11 +264,11 @@ class _HomePageState extends State<HomePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    live
-                        ? 'Mesh 网关在线'
-                        : (_connected ? '等待网关上报…' : '未连接服务器'),
+                    live ? 'Mesh 网关在线' : (_connected ? '等待网关上报…' : '未连接服务器'),
                     style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w600),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -301,7 +276,9 @@ class _HomePageState extends State<HomePage> {
                         ? '点此查看网络拓扑'
                         : 'root ${gw.root} · L${gw.layer} · 更新于 ${agoLabel(gw.updatedAt)}',
                     style: const TextStyle(
-                        color: CupertinoColors.systemGrey, fontSize: 12),
+                      color: CupertinoColors.systemGrey,
+                      fontSize: 12,
+                    ),
                   ),
                 ],
               ),
@@ -309,19 +286,29 @@ class _HomePageState extends State<HomePage> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text('$_onlineCount',
-                    style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: CupertinoColors.activeBlue)),
-                Text('在线/${_devices.length}',
-                    style: const TextStyle(
-                        color: CupertinoColors.systemGrey, fontSize: 11)),
+                Text(
+                  '$_onlineCount',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: CupertinoColors.activeBlue,
+                  ),
+                ),
+                Text(
+                  '在线/${_devices.length}',
+                  style: const TextStyle(
+                    color: CupertinoColors.systemGrey,
+                    fontSize: 11,
+                  ),
+                ),
               ],
             ),
             const SizedBox(width: 4),
-            const Icon(CupertinoIcons.chevron_forward,
-                size: 16, color: CupertinoColors.systemGrey3),
+            const Icon(
+              CupertinoIcons.chevron_forward,
+              size: 16,
+              color: CupertinoColors.systemGrey3,
+            ),
           ],
         ),
       ),

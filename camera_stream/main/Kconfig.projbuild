@@ -1,18 +1,29 @@
 menu "Camera Stream Configuration"
 
+    choice EXAMPLE_PROV_TRANSPORT
+        prompt "WiFi provisioning transport"
+        default EXAMPLE_PROV_TRANSPORT_BLE
+
+        config EXAMPLE_PROV_TRANSPORT_BLE
+            bool "BLE (recommended)"
+
+        config EXAMPLE_PROV_TRANSPORT_SOFTAP
+            bool "SoftAP compatibility mode"
+    endchoice
+
     config EXAMPLE_PROV_SOFTAP_PREFIX
-        string "Provisioning SoftAP name prefix"
+        string "Provisioning device name prefix"
         default "Doorbell-"
         help
-            On first boot (no stored WiFi) the board starts a SoftAP named
-            "<prefix><last 3 MAC bytes>", e.g. Doorbell-4C3408, for phone provisioning.
+            The BLE advertisement or SoftAP name is built as
+            "<prefix><last 3 MAC bytes>", e.g. Doorbell-4C3408.
 
     config EXAMPLE_PROV_POP
         string "Provisioning proof-of-possession"
         default "doorbell1234"
         help
             Proof-of-possession string for Security1 provisioning. The App must use
-            the same value when sending WiFi credentials over the SoftAP channel.
+            the same value when sending WiFi credentials over BLE or SoftAP.
 
     config EXAMPLE_MQTT_BROKER_URI
         string "MQTT broker URI"
