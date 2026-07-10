@@ -19,7 +19,6 @@ class RootPage extends StatefulWidget {
 
 class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
   final MqttService _mqtt = MqttService();
-  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
   StreamSubscription<DoorbellEvent>? _eventSub;
   StreamSubscription<String>? _notificationSub;
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
@@ -70,10 +69,8 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
 
   void _showIncomingCall() {
     if (_callVisible || !mounted) return;
-    final navigator = _navKey.currentState;
-    if (navigator == null) return;
     _callVisible = true;
-    navigator
+    Navigator.of(context, rootNavigator: true)
         .push(
           CupertinoPageRoute<void>(
             fullscreenDialog: true,
@@ -92,18 +89,13 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  /// Handles the Android system back button / left-swipe. This [PopScope] lives
-  /// at the [CupertinoApp] root navigator level (the only place that actually
-  /// receives the system pop), so it never quits the app on the first press:
-  /// it first pops a page pushed inside the in-app navigator (a device detail
-  /// page, or the full-screen incoming-call overlay), and only asks to exit
-  /// once nothing else is left to pop.
+  /// Handles the Android system back button / left-swipe while the account
+  /// content is the front-most route. Device detail pages and the full-screen
+  /// incoming-call overlay are pushed onto the [CupertinoApp] root navigator,
+  /// so the system pops those first on its own; this [PopScope] (attached to
+  /// the home route) only runs once nothing is left to pop, and then asks to
+  /// exit instead of quitting on the first press.
   Future<void> _handleBack() async {
-    final navigator = _navKey.currentState;
-    if (navigator != null && navigator.canPop()) {
-      navigator.pop();
-      return;
-    }
     final shouldExit = await _confirmExit();
     if (shouldExit) await SystemNavigator.pop();
   }
@@ -132,23 +124,20 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // The PopScope must sit above the nested navigator so it registers with the
-    // CupertinoApp root navigator, which is what the OS back button targets. A
-    // single in-app navigator hosts both the account content ([AppShell]) and
-    // any pushed pages (device detail / incoming-call overlay), so the back
-    // button pops them in order before the exit prompt is ever shown.
+    // [AppShell] is the home route of the CupertinoApp root navigator; pushed
+    // pages (device detail / incoming-call overlay) go on that same navigator,
+    // so the OS back button pops them on its own. This [PopScope] guards only
+    // the home route: with nothing left to pop it prompts to exit rather than
+    // quitting immediately. Wrapping the content in a nested [Navigator] here
+    // would let that inner navigator swallow the back button and quit the app
+    // once its stack is empty, which is the regression this avoids.
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         _handleBack();
       },
-      child: Navigator(
-        key: _navKey,
-        onGenerateRoute: (_) => CupertinoPageRoute<void>(
-          builder: (_) => AppShell(mqtt: _mqtt),
-        ),
-      ),
+      child: AppShell(mqtt: _mqtt),
     );
   }
 }
