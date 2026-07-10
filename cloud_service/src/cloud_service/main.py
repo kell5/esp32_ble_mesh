@@ -262,7 +262,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def register_device(request: RegisterDeviceRequest) -> DeviceResponse:
         return store.register_device(
-            request.device_id, request.type, request.name, request.metadata
+            request.device_id, request.type, request.name, request.metadata,
+            capabilities=request.capabilities if "capabilities" in request.model_fields_set else None,
         )
 
     @application.get(

@@ -225,3 +225,35 @@ location ^~ /cloud/ {
 ## 后续边界
 
 当前邮箱账号体系为 **demo 级**：token 不过期、无邮箱验证/找回密码/登录限流，密码哈希用标准库 PBKDF2。生产化前还需正式认证（如 JWT+刷新、过期与限流）、broker ACL 和凭据轮换。TLS 由自有服务器的 Nginx 反代提供（见上）。门铃事件仅记录事件元数据，尚无快照/媒体存储与索引；固件 OTA 未实现。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。
+
+## MQTT 协议规范（T-CLOUD-2）
+
+设备注册支持 `capabilities: string[]`，例如 `["onoff", "doorbell.ring"]`。未上报能力的旧设备会返回空数组；`GET /api/v1/me/devices`、`GET /api/v1/devices/{id}` 和 shadow 响应都会带 `capabilities`，便于 App 按能力渲染控件。
+
+规范化 topic 使用：
+
+```text
+farmely/{class}/{device_id}/{direction}/{channel}
+```
+
+- `class`: `light | doorbell | gateway | sensor | camera`
+- `direction`: `up` 表示设备到云，`down` 表示云到设备
+- `channel`: `status | event | cmd | ota | shadow`
+
+规范化 payload 使用统一信封：
+
+```json
+{
+  "v": 1,
+  "msg_id": "uuid-or-device-message-id",
+  "ts": 1730000000,
+  "type": "status",
+  "data": {
+    "online": true
+  }
+}
+```
+
+云端桥接当前订阅 `farmely/+/+/up/+`，同时继续订阅兼容期旧 topic：`office/light/node/+/status`、`office/light/gateway/status`、`doorbell/+/status`、`doorbell/+/event`。旧 topic 不会被切断；新旧 topic 的上报都会进入同一份设备影子。`msg_id`（兼容旧字段 `message_id`）用于上报幂等去重，重复上报不会重复推进 reported shadow 版本或重复记录门铃事件。
+
+云端下发 desired 命令时会同时发布新规范 topic `farmely/{class}/{device_id}/down/cmd`（信封 payload）和现有旧 topic（light: `office/light/node/{id}/cmd`，doorbell: `doorbell/{id}/cmd`），兼容期内新旧固件都可接收。

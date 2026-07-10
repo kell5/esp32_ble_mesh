@@ -58,6 +58,45 @@ class CloudApiTest(unittest.TestCase):
         self.assertEqual(devices.status_code, 200, devices.text)
         self.assertEqual([item["device_id"] for item in devices.json()], ["node-001"])
 
+    def test_capabilities_are_returned_for_current_user_devices_and_shadow(self) -> None:
+        account = self.client.post(
+            "/api/v1/auth/register",
+            json={"email": "caps@example.com", "password": "secret123"},
+        )
+        self.assertEqual(account.status_code, 201, account.text)
+        bearer = {"Authorization": f"Bearer {account.json()['token']}"}
+        created = self.client.post(
+            "/api/v1/devices",
+            headers=self.headers,
+            json={
+                "device_id": "node-cap",
+                "type": "light_bulb",
+                "capabilities": ["onoff", "sensor.temperature"],
+            },
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertEqual(created.json()["capabilities"], ["onoff", "sensor.temperature"])
+
+        claim = self.client.post("/api/v1/me/devices/node-cap/claim", headers=bearer)
+        self.assertEqual(claim.status_code, 200, claim.text)
+        devices = self.client.get("/api/v1/me/devices", headers=bearer)
+        self.assertEqual(devices.status_code, 200, devices.text)
+        self.assertEqual(devices.json()[0]["capabilities"], ["onoff", "sensor.temperature"])
+
+        shadow = self.client.get("/api/v1/devices/node-cap/shadow", headers=bearer)
+        self.assertEqual(shadow.status_code, 200, shadow.text)
+        self.assertEqual(shadow.json()["capabilities"], ["onoff", "sensor.temperature"])
+
+    def test_legacy_device_without_capabilities_remains_readable(self) -> None:
+        self._register("node-legacy")
+        device = self.client.get("/api/v1/devices/node-legacy", headers=self.headers)
+        self.assertEqual(device.status_code, 200, device.text)
+        self.assertEqual(device.json()["capabilities"], [])
+
+        shadow = self.client.get("/api/v1/devices/node-legacy/shadow", headers=self.headers)
+        self.assertEqual(shadow.status_code, 200, shadow.text)
+        self.assertEqual(shadow.json()["capabilities"], [])
+
     def test_claim_conflict(self) -> None:
         self._register()
         first = self.client.post(
@@ -110,6 +149,79 @@ class CloudApiTest(unittest.TestCase):
         self.assertTrue(reported["online"])
         self.assertTrue(reported["on"])
         self.assertEqual(reported["type"], "socket")
+
+    def test_normalized_and_legacy_light_topics_update_reported_shadow(self) -> None:
+        bridge = self.app.state.mqtt_bridge
+        bridge.ingest(
+            "farmely/light/node-new/up/status",
+            json.dumps(
+                {
+                    "v": 1,
+                    "msg_id": "new-status-1",
+                    "ts": 1730000000,
+                    "type": "status",
+                    "data": {
+                        "online": True,
+                        "state": "on",
+                        "type": "socket",
+                        "capabilities": ["onoff"],
+                    },
+                }
+            ).encode(),
+        )
+        bridge.ingest(
+            "farmely/light/node-new/up/status",
+            json.dumps(
+                {
+                    "v": 1,
+                    "msg_id": "new-status-1",
+                    "ts": 1730000001,
+                    "type": "status",
+                    "data": {"online": True, "state": "off", "type": "socket"},
+                }
+            ).encode(),
+        )
+        new_shadow = self.client.get(
+            "/api/v1/devices/node-new/shadow", headers=self.headers
+        ).json()
+        self.assertTrue(new_shadow["reported"]["on"])
+        self.assertEqual(new_shadow["capabilities"], ["onoff"])
+        self.assertEqual(new_shadow["reported_version"], 1)
+
+        bridge.ingest(
+            "office/light/node/node-old/status",
+            json.dumps({"online": True, "state": "off", "type": "relay"}).encode(),
+        )
+        old_shadow = self.client.get(
+            "/api/v1/devices/node-old/shadow", headers=self.headers
+        ).json()
+        self.assertFalse(old_shadow["reported"]["on"])
+
+    def test_normalized_doorbell_event_updates_shadow_and_dedupes(self) -> None:
+        bridge = self.app.state.mqtt_bridge
+        envelope = {
+            "v": 1,
+            "msg_id": "door-event-1",
+            "ts": 1730000000,
+            "type": "event",
+            "data": {
+                "event": "ringing",
+                "type": "doorbell",
+                "capabilities": ["doorbell.ring"],
+            },
+        }
+        bridge.ingest("farmely/doorbell/door-new/up/event", json.dumps(envelope).encode())
+        envelope["data"]["event"] = "ignored"
+        bridge.ingest("farmely/doorbell/door-new/up/event", json.dumps(envelope).encode())
+
+        shadow = self.client.get("/api/v1/devices/door-new/shadow", headers=self.headers)
+        self.assertEqual(shadow.status_code, 200, shadow.text)
+        self.assertEqual(shadow.json()["reported"]["last_event"], "ringing")
+        self.assertEqual(shadow.json()["capabilities"], ["doorbell.ring"])
+
+        events = self.client.get("/api/v1/devices/door-new/events", headers=self.headers)
+        self.assertEqual(events.status_code, 200, events.text)
+        self.assertEqual([item["event"] for item in events.json()], ["ringing"])
 
     def test_stale_device_gets_offline_reason(self) -> None:
         payload = json.dumps({"online": True, "state": "off", "type": "relay"}).encode()

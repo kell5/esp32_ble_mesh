@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -9,6 +9,9 @@ DEVICE_ID_PATTERN = r"^[A-Za-z0-9._:-]{1,96}$"
 USER_ID_PATTERN = r"^[A-Za-z0-9._:@-]{1,96}$"
 TYPE_PATTERN = r"^[a-z][a-z0-9_]{0,47}$"
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+CAPABILITY_PATTERN = r"^[a-z][a-z0-9_.-]{0,63}$"
+
+CapabilityName = Annotated[str, Field(pattern=CAPABILITY_PATTERN)]
 
 
 class ApiModel(BaseModel):
@@ -42,6 +45,7 @@ class RegisterDeviceRequest(ApiModel):
     type: str = Field(pattern=TYPE_PATTERN)
     name: str | None = Field(default=None, max_length=96)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    capabilities: list[CapabilityName] = Field(default_factory=list, max_length=64)
 
 
 class ClaimDeviceRequest(ApiModel):
@@ -64,12 +68,14 @@ class DeviceResponse(ApiModel):
     name: str | None
     room_id: str | None
     metadata: dict[str, JsonValue]
+    capabilities: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
 
 class ShadowResponse(ApiModel):
     device_id: str
+    capabilities: list[str] = Field(default_factory=list)
     desired: dict[str, JsonValue]
     reported: dict[str, JsonValue]
     desired_version: int
