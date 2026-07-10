@@ -169,6 +169,45 @@ menu "Example Configuration"
         default 50
         help
             The number of devices over the network(max: 300).
+    choice MESH_DEVICE_TYPE_CHOICE
+        prompt "Mesh node product type"
+        default MESH_DEVICE_TYPE_LIGHT_BULB
+        help
+            Product type published by this node. All current profiles use the
+            same on/off mesh command; the board LED acts as the demo output.
+
+        config MESH_DEVICE_TYPE_LIGHT_BULB
+            bool "Smart light bulb"
+        config MESH_DEVICE_TYPE_CEILING_LIGHT
+            bool "Ceiling light"
+        config MESH_DEVICE_TYPE_LIGHT_STRIP
+            bool "Light strip"
+        config MESH_DEVICE_TYPE_WALL_SWITCH
+            bool "Wall switch"
+        config MESH_DEVICE_TYPE_SOCKET
+            bool "Smart socket"
+        config MESH_DEVICE_TYPE_RELAY
+            bool "Relay / generic controller"
+        config MESH_DEVICE_TYPE_CURTAIN_MOTOR
+            bool "Curtain motor"
+        config MESH_DEVICE_TYPE_VALVE
+            bool "Valve actuator"
+        config MESH_DEVICE_TYPE_DOOR_LOCK
+            bool "Smart door lock"
+    endchoice
+
+    config MESH_DEVICE_TYPE
+        string
+        default "light_bulb" if MESH_DEVICE_TYPE_LIGHT_BULB
+        default "ceiling_light" if MESH_DEVICE_TYPE_CEILING_LIGHT
+        default "light_strip" if MESH_DEVICE_TYPE_LIGHT_STRIP
+        default "wall_switch" if MESH_DEVICE_TYPE_WALL_SWITCH
+        default "socket" if MESH_DEVICE_TYPE_SOCKET
+        default "relay" if MESH_DEVICE_TYPE_RELAY
+        default "curtain_motor" if MESH_DEVICE_TYPE_CURTAIN_MOTOR
+        default "valve" if MESH_DEVICE_TYPE_VALVE
+        default "door_lock" if MESH_DEVICE_TYPE_DOOR_LOCK
+
     config MESH_GATEWAY_PROVISIONING
         bool "Enable BLE WiFi provisioning for this gateway build"
         default n

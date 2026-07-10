@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 
 import '../services/mqtt_service.dart';
+import '../widgets/device_icon.dart';
 import '../widgets/smart_cards.dart';
 import 'doorbell_page.dart';
 import 'gateway_detail_page.dart';
@@ -23,11 +24,11 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  List<LightDevice> _devices = const [];
+  List<MeshDevice> _devices = const [];
   GatewayStatus? _gateway;
   bool _connected = false;
 
-  StreamSubscription<List<LightDevice>>? _devSub;
+  StreamSubscription<List<MeshDevice>>? _devSub;
   StreamSubscription<GatewayStatus?>? _gwSub;
   StreamSubscription<bool>? _connSub;
 
@@ -66,16 +67,19 @@ class _HomePageState extends State<HomePage> {
     return DateTime.now().difference(gw.updatedAt).inSeconds < 35;
   }
 
-  int get _onlineCount => _devices.where((d) => d.online).length;
+  List<MeshDevice> get _productDevices =>
+      _devices.where((device) => !device.isRoot).toList();
 
-  void _toggle(LightDevice d) {
+  int get _onlineCount => _productDevices.where((d) => d.online).length;
+
+  void _toggle(MeshDevice d) {
     final value = !d.on;
     widget.mqtt.setNodeLight(d.id, value);
     setState(() {
       _devices = _devices
           .map(
             (x) => x.id == d.id
-                ? LightDevice(
+                ? MeshDevice(
                     id: x.id,
                     on: value,
                     online: x.online,
@@ -102,7 +106,7 @@ class _HomePageState extends State<HomePage> {
     ),
   );
 
-  void _openLight(LightDevice d) => Navigator.of(context).push(
+  void _openDevice(MeshDevice d) => Navigator.of(context).push(
     CupertinoPageRoute<void>(
       builder: (_) => LightDetailPage(mqtt: widget.mqtt, deviceId: d.id),
     ),
@@ -135,7 +139,7 @@ class _HomePageState extends State<HomePage> {
                   crossAxisCount: 2,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
-                  childAspectRatio: 1.25,
+                  childAspectRatio: 1.05,
                 ),
                 delegate: SliverChildListDelegate(_tiles()),
               ),
@@ -162,11 +166,12 @@ class _HomePageState extends State<HomePage> {
     final tiles = <Widget>[
       // Doorbell: fixed device from config, navigation-only card.
       SmartCard(
-        icon: CupertinoIcons.bell_fill,
-        iconColor: _connected
-            ? CupertinoColors.activeBlue
-            : CupertinoColors.systemGrey3,
-        title: '门铃',
+        leading: DeviceIcon(
+          type: DeviceType.doorbell,
+          online: _connected,
+          on: _connected,
+        ),
+        title: '智能门铃',
         subtitle: _connected ? '已连接' : '未连接',
         online: _connected,
         trailing: const Icon(
@@ -178,16 +183,11 @@ class _HomePageState extends State<HomePage> {
       ),
     ];
 
-    for (final d in _devices) {
+    for (final d in _productDevices) {
       final active = d.online && d.on && d.type.isControllable;
       tiles.add(
         SmartCard(
-          icon: _iconFor(d),
-          iconColor: !d.online
-              ? CupertinoColors.systemGrey3
-              : (active
-                    ? CupertinoColors.systemYellow
-                    : CupertinoColors.systemGrey),
+          leading: DeviceIcon(type: d.type, online: d.online, on: d.on),
           title: d.displayName,
           subtitle: _subtitleFor(d),
           online: d.online,
@@ -207,31 +207,16 @@ class _HomePageState extends State<HomePage> {
                         ),
                       )
                     : null),
-          onTap: () => _openLight(d),
+          onTap: () => _openDevice(d),
         ),
       );
     }
     return tiles;
   }
 
-  IconData _iconFor(LightDevice d) {
-    switch (d.type) {
-      case DeviceType.sensor:
-        return CupertinoIcons.thermometer;
-      case DeviceType.switch_:
-        return CupertinoIcons.power;
-      case DeviceType.light:
-      case DeviceType.unknown:
-        return d.on ? CupertinoIcons.lightbulb_fill : CupertinoIcons.lightbulb;
-    }
-  }
-
-  String _subtitleFor(LightDevice d) {
-    final where = d.isRoot ? '网关' : '节点 · L${d.layer}';
-    final state = !d.online
-        ? '离线'
-        : (d.type.isControllable ? (d.on ? '已开启' : '已关闭') : '在线');
-    return '$where · $state';
+  String _subtitleFor(MeshDevice d) {
+    final where = '节点 · L${d.layer}';
+    return '$where · ${d.type.stateLabel(online: d.online, on: d.on)}';
   }
 
   Widget _gatewayBanner() {
@@ -249,14 +234,11 @@ class _HomePageState extends State<HomePage> {
         ),
         child: Row(
           children: [
-            Icon(
-              live
-                  ? CupertinoIcons.antenna_radiowaves_left_right
-                  : CupertinoIcons.wifi_slash,
-              color: live
-                  ? CupertinoColors.activeGreen
-                  : CupertinoColors.systemGrey,
-              size: 28,
+            DeviceIcon(
+              type: DeviceType.gateway,
+              online: live,
+              on: live,
+              size: 54,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -295,7 +277,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
                 Text(
-                  '在线/${_devices.length}',
+                  '在线/${_productDevices.length}',
                   style: const TextStyle(
                     color: CupertinoColors.systemGrey,
                     fontSize: 11,

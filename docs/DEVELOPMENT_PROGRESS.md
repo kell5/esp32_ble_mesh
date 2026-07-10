@@ -7,7 +7,7 @@
 - GitHub：`https://github.com/kell5/esp32_ble_mesh`
 - 主分支：`main`
 - 最近更新：`2026-07-10`
-- 当前开发主题：统一 BLE 配网、统一设备 App、门铃后台通知
+- 当前开发主题：Phase B 云端邮箱账号体系 + App 注册/登录/设备认领 + 门铃事件记录
 
 ## 1. 产品目标
 
@@ -135,29 +135,61 @@ Flutter App
 - [x] Flutter analyze 和 debug APK 构建通过。
 - [ ] 可选硬件验证：实际清除门铃/网关 WiFi 后，用 App 完成一次 BLE 配网。
 
-### Phase A-3：门铃系统通知 — 第一阶段已实现
+### Phase A-3：门铃系统通知 — 按当前需求已完成
 
 - [x] App 在前台收到 `ringing` 时显示来电页面。
 - [x] App 处于后台但进程仍存活时显示 Android/iOS 本地系统通知。
 - [x] 点击通知进入门铃来电/实时画面页面。
 - [x] Android 13+ 通知权限和高优先级门铃通知频道。
 - [x] 通知插件所需 core library desugaring 配置。
-- [ ] 真正“App 被系统彻底杀死后仍能通知”：需要服务端推送。
-- [ ] 推送提供方待选：国际 Android/iOS 用 FCM + APNs；华为无 GMS 设备建议 HMS Push Kit；也可做统一 Push Provider 接口同时支持两者。
+- [x] 用户确认 App 被系统彻底杀死后不需要通知，不接入 FCM/HMS 云推送。
 
-> 当前本地通知依赖 App 的 MQTT 进程仍在运行。不要把它描述成已实现的离线云推送。
+> 当前通知范围：App 前台显示来电页；App 退到后台但 MQTT 进程仍存活时显示系统通知。
 
-### Phase B：云端设备模型 — 未开始
+### Phase A-4：多设备类型、图标资产与状态协议 — 代码、构建与手机布局验证完成
 
-计划内容：
+- [x] 实际读取 `app/image/`：找到 26 张单图，不是清单中的 36 张。
+- [x] 识别 9 类设备：网关、灯泡、吸顶灯、灯带、墙壁开关、插座、窗帘电机、阀门、门锁。
+- [x] 确认缺失：门铃、摄像头、继电器三态，以及阀门离线态。
+- [x] 将可用素材中心裁剪并转换为 26 个 `512×512` WebP 测试 asset。
+- [x] App `DeviceType` 扩展到具体产品类型，并兼容旧值 `light/switch`。
+- [x] 首页、网关详情和设备详情接入真实设备图片；缺图时使用系统图标。
+- [x] 使用新素材替换 Android、iOS、macOS、Web 和 Windows 应用启动图标。
+- [x] 首页过滤 root 节点，网关只在网关模块显示，避免重复显示成灯。
+- [x] 设备详情按灯具、开关/插座、窗帘、阀门、门锁显示不同扩展方向。
+- [x] Mesh 固件增加 Kconfig 节点类型选择和 MQTT `type` 字段。
+- [x] 状态包采用末尾追加字段，网关仍兼容没有 `type` 的旧节点。
+- [x] Flutter analyze 通过（0 issues），debug APK 构建通过。
+- [x] debug APK 已安装到已连接手机；设备图标与页面布局显示正常，已修复设备卡片底部 16px 溢出；未触发实际节点控制。
+- [x] ESP32-S3 网关构建通过。
+- [x] ESP32 节点构建通过；COM6 WROOM 当前断电，未做烧录或串口验证。
+- [ ] 用户实机选择不同设备类型并烧录验证。
 
-- [ ] 设备注册与用户绑定。
-- [ ] 统一设备影子（desired/reported）。
-- [ ] MQTT LWT、离线原因、消息版本和幂等。
-- [ ] 房间、分组、场景和自动化规则。
+详细文件映射、协议示例和测试步骤见 [DEVICE_ASSET_STATUS.md](DEVICE_ASSET_STATUS.md)。
+
+### Phase B：云端设备模型 — 首个纵向切片完成
+
+- [x] 新增 `cloud_service/`：FastAPI + SQLite 本地优先服务。
+- [x] 设备注册、未认领设备绑定用户、按用户查询设备。
+- [x] 统一设备影子（`desired/reported`）、独立版本号和 `message_id` 幂等。
+- [x] 兼容现有 Mesh 节点、网关和门铃 MQTT 状态主题，不修改既有主题语义。
+- [x] `desired.on`/`desired.command` 转换为现有节点和门铃控制主题。
+- [x] 云端超时离线与明确 `offline_reason`。
+- [x] Mesh 网关和门铃 MQTT LWT、消息版本/消息 ID 原生上报。
+- [x] 房间、分组、场景和自动化规则（纯 cloud_service 后端切片：REST CRUD、整组下发、场景激活、`reported` 触发的自动化引擎）。
+- [x] 邮箱账号体系（demo 级）：`accounts`/`account_tokens` 表、注册/登录/me/logout、per-user Bearer token、密码 PBKDF2 哈希（标准库、无新依赖）。
+- [x] 账号即空间的设备隔离：`/me/devices`、`/me/devices/<id>/claim`，非管理员只能访问自己认领的设备（跨账号 403）；`X-Cloud-Token` 保留为管理员/设备置备。
+- [x] 门铃事件记录：MQTT `event` 落库（`message_id` 幂等），`/me/events` 与 `/devices/<id>/events` 分页查询。
+- [x] App 注册/登录页（邮箱+密码，登录/注册切换）+ 只存 服务器地址/Bearer token/user_id/email；「云端」页支持「添加设备」（输入设备 ID 认领）。
+- [x] App 修复 Android 系统返回键直接退出：先弹内层页面 → 切回首个标签 → 再弹确认框退出（`PopScope` + 每标签独立 Navigator）。
+- [x] 部署到自有服务器：`Dockerfile` + `docker-compose.yml`（容器仅监听 `127.0.0.1:8000`），Nginx 反代 `https://lk-mcu.online/cloud/` 复用现有 Let's Encrypt 证书，已上线连真实 broker。
+- [x] Ruff 通过；28 个测试通过（含账号鉴权与隔离、门铃事件）。
+- [ ] 生产 broker ACL、凭据轮换；账号体系生产化（token 过期/刷新、邮箱验证、限流）。
 - [ ] 固件 OTA、版本管理、灰度与回滚。
-- [ ] 门铃事件记录、快照索引和权限控制。
-- [ ] 服务端推送（FCM/APNs/HMS）和设备 token 管理。
+- [ ] 门铃快照/媒体存储与索引。
+- [ ] 自动化增强：时间/多条件触发、延时与冷却。
+
+运行、API、环境变量、账号鉴权和部署见 [`cloud_service/README.md`](../cloud_service/README.md)。
 
 ### Phase C：Matter over WiFi 简历演示 — 未开始
 
@@ -174,13 +206,16 @@ Flutter App
 
 ## 7. 最近构建结果（2026-07-10）
 
+> Phase A-4 已完成 Flutter、固件和手机布局验证；Phase B 云端设备模型与固件 LWT/消息版本切片已通过静态检查、本地 API 测试和三套固件构建。
+
 | 目标 | 结果 | 产物/备注 |
 |---|---|---|
 | Flutter analyze | 通过，0 issues | `app/` |
 | Flutter debug APK | 通过 | `app/build/app/outputs/flutter-apk/app-debug.apk` |
-| 门铃 ESP32-S3 | 通过 | `camera_stream/build/`；并行编译曾触发编译器异常，`ninja -j1` 可稳定通过 |
-| Mesh 网关 ESP32-S3 | 通过 | `internal_communication/build-gateway/` |
-| Mesh 节点 ESP32 | 通过 | `internal_communication/build-node/`；app 分区只剩约 1%，需关注 |
+| Cloud service | Ruff 通过；28 个测试通过（含账号鉴权/隔离、门铃事件、房间/分组/场景/自动化） | `cloud_service/` |
+| 门铃 ESP32-S3 | 通过 | `camera_stream/build/`；app 分区剩余 13% |
+| Mesh 网关 ESP32-S3 | 通过 | `internal_communication/build-gateway/`；app 分区剩余 13% |
+| Mesh 节点 ESP32 | 通过 | `internal_communication/build-node/`；app 分区只剩 1%，需关注 |
 
 关键构建配置：
 
@@ -210,6 +245,31 @@ Flutter App
 - `internal_communication/main/Kconfig.projbuild`
 - `internal_communication/main/CMakeLists.txt`
 - `internal_communication/sdkconfig.gateway.defaults`
+- `app/assets/device_icons/`
+- `app/lib/widgets/device_icon.dart`
+- `app/lib/widgets/smart_cards.dart`
+- `app/lib/pages/home_page.dart`
+- `app/lib/pages/gateway_detail_page.dart`
+- `app/lib/pages/light_detail_page.dart`
+- `app/lib/services/mqtt_service.dart`
+- `internal_communication/main/include/mesh_light.h`
+- `docs/DEVICE_ASSET_STATUS.md`
+- `cloud_service/src/cloud_service/models.py`（房间/分组/场景/自动化模型）
+- `cloud_service/src/cloud_service/storage.py`（对应 SQLite 表与方法）
+- `cloud_service/src/cloud_service/automation.py`（分组下发/场景激活/自动化引擎）
+- `cloud_service/src/cloud_service/main.py`（新增 REST 端点、引擎接线）
+- `cloud_service/src/cloud_service/mqtt_bridge.py`（reported 变更回调触发自动化）
+- `cloud_service/tests/test_organization.py`（新增功能测试）
+- `cloud_service/README.md`
+- `app/lib/services/cloud_client.dart`（云端 REST 客户端；Bearer 鉴权、register/login/claim、错误文案）
+- `app/lib/services/cloud_session.dart`（登录会话本地持久化：地址/token/user_id/email）
+- `app/lib/pages/cloud_login_page.dart`（邮箱注册/登录页）、`cloud_devices_page.dart`（`/me/devices` + 添加设备认领）、`cloud_device_detail_page.dart`
+- `app/lib/pages/root_page.dart`（底部标签 + `PopScope` 修复系统返回退出）
+- `app/pubspec.yaml`（新增 `shared_preferences`）
+- `cloud_service/src/cloud_service/security.py`（PBKDF2 密码哈希、token 生成、`Principal`）
+- `cloud_service/src/cloud_service/models.py`（账号/事件模型）、`storage.py`（`accounts`/`account_tokens`/事件表与方法）、`main.py`（auth/me/events 端点、Bearer 鉴权与归属校验）、`mqtt_bridge.py`（门铃事件落库）
+- `cloud_service/tests/test_auth.py`（账号鉴权与隔离）、`test_api.py`（事件）
+- `cloud_service/Dockerfile`、`docker-compose.yml`、`.dockerignore`（自有服务器部署，容器仅监听 127.0.0.1）
 
 ## 9. 已知风险和禁止回归
 
@@ -219,32 +279,39 @@ Flutter App
 4. ESP32 节点固件 app 分区余量约 1%，新增组件前先检查尺寸。
 5. COM6 关闭 brownout 只是供电不足的兜底，存在掉电/闪存风险，最终应改善供电。
 6. BLE 配网只支持 2.4 GHz WiFi；错误提示不要暗示 ESP32 可连接 5 GHz。
-7. 本地通知不是云推送；进程被杀后的通知必须由服务器和系统推送通道完成。
+7. 通知仅保证 App 前台和后台进程存活场景；进程被杀后不通知是当前确认需求。
 8. 不提交 `build/`、生成的 `sdkconfig.*.generated`、日志、截图和临时脚本。
+9. 当前 26 张图片是 RGB 棋盘格背景测试素材；正式发布前应替换为无平台标识、透明背景、状态一致的素材。
+10. 窗帘、阀门、门锁等目前只复用 on/off 协议和板载 LED 指示，尚未实现真实电机、限位、继电器与安全保护。
+11. COM6 WROOM 当前已断电；本轮不连接、不烧录，仅做节点固件构建验证。
 
 ## 10. 下一步优先级
 
-1. 提交并推送 Phase A-2/A-3 与文档。
-2. 可选：用测试手机验证 App 退到后台后按 COM8 IO0，系统通知出现且点击能进入门铃页。
-3. 可选：擦除门铃或网关 WiFi，完成一次真实 BLE 配网闭环。
-4. 设计 Phase B 的设备注册、影子、LWT、OTA 和 Push Provider 接口。
-5. 如需要“App 被杀仍提醒”，优先确定测试机是否具备 GMS；MEP AN00 若无 GMS，选择 HMS Push Kit 或 FCM/HMS 双实现。
-6. 准备 Matter over WiFi 灯/插座演示节点。
+1. 完成 Phase A-4 的 Flutter analyze、debug APK、ESP32-S3 网关和 ESP32 节点构建。
+2. 将新版 APK 安装到已连接手机，检查设备图标、离线态、类型文案和详情页。
+3. WROOM 上电后由用户选择节点类型并烧录，验证 MQTT `type` 和 App 卡片同步变化。
+4. 将当前功能分支合并到 `main`。
+5. 可选：用测试手机验证 App 退到后台后按 COM8 IO0，系统通知出现且点击能进入门铃页。
+6. 可选：擦除门铃或网关 WiFi，完成一次真实 BLE 配网闭环。
+7. 设计 Phase B 的设备注册、影子、LWT、OTA、房间和自动化接口。
+8. 准备 Matter over WiFi 灯/插座演示节点。
 
 ## 11. 新会话恢复步骤
 
 新会话不要直接改代码，按顺序执行：
 
-1. 阅读本文件和 `docs/APP_DEVICE_ICON_PROMPTS.md`。
+1. 阅读本文件、`docs/DEVICE_ASSET_STATUS.md`、`docs/APP_DEVICE_ICON_PROMPTS.md` 和 `docs/SINGLE_DEVICE_ICON_PROMPTS.md`。
 2. 执行 `git status --short`、`git branch --show-current`、`git log -1 --oneline`。
-3. 确认用户要继续的是 BLE 硬件验证、系统推送、Phase B、Matter，还是 UI 图标资源。
+3. 先检查 Phase A-4 的构建/手机安装是否完成，再确认继续 BLE 硬件验证、Phase B 或 Matter。
 4. 修改前阅读对应模块 README 和当前实现。
 5. 完成后更新本文件的阶段状态、构建结果、已知问题和下一步。
 
 ## 12. 文档索引
 
 - `docs/DEVELOPMENT_PROGRESS.md`：总进度和会话交接（本文件）。
-- `docs/APP_DEVICE_ICON_PROMPTS.md`：设备类型图标统一生成提示词。
+- `docs/DEVICE_ASSET_STATUS.md`：已识别图片、缺失素材、App 映射、固件 `type` 协议和测试步骤。
+- `docs/APP_DEVICE_ICON_PROMPTS.md`：设备图标视觉规范与类型描述。
+- `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成的完整可复制提示词。
 - `camera_stream/README.md`：门铃摄像头与 MJPEG 链路。
 - `server_relay/README.md`：公网 MJPEG 中继部署。
 - `internal_communication/办公区灯控技术方案.md`：Mesh 灯控设计。

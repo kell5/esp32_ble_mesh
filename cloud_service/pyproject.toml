@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools==78.1.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mesh-cloud-service"
+version = "0.1.0"
+description = "Local-first device registry, shadow API, and MQTT compatibility bridge"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.12",
+  "paho-mqtt==2.1.0",
+  "uvicorn==0.34.2",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx==0.28.1",
+  "ruff==0.11.8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

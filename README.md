@@ -1,6 +1,6 @@
 # ESP32 智能门铃与 Mesh 智能家居
 
-本仓库包含 Flutter 智能家居 App、ESP32-S3 可视门铃、ESP-WIFI-MESH 网关/节点和 MJPEG 公网中继。
+本仓库包含 Flutter 智能家居 App、ESP32-S3 可视门铃、ESP-WIFI-MESH 网关/节点、云端设备模型和 MJPEG 公网中继。
 
 ## 新会话/任务交接
 
@@ -14,7 +14,10 @@
 - `camera_stream/`：ESP32-S3 门铃、OV3660、IO0、MQTT、MJPEG 和中继推流。
 - `internal_communication/`：ESP-WIFI-MESH 网关与节点、MQTT 桥接、节点状态。
 - `server_relay/`：Python MJPEG 公网中继。
-- `docs/APP_DEVICE_ICON_PROMPTS.md`：App 各设备类型图标生成提示词。
+- `cloud_service/`：设备注册、用户绑定、设备影子和 MQTT 兼容桥接。
+- `docs/DEVICE_ASSET_STATUS.md`：已识别图片、缺失素材、App 映射、固件设备类型协议和测试步骤。
+- `docs/APP_DEVICE_ICON_PROMPTS.md`：App 设备图标视觉规范。
+- `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成时可直接复制的完整提示词。
 
 ## 当前阶段
 
@@ -22,7 +25,9 @@
 - Mesh 自动入网、自动发现、单灯/全体控制：完成。
 - 统一设备首页与设备子页面：完成。
 - 门铃/网关统一 BLE WiFi 配网：代码与构建完成，硬件回归可选。
-- App 后台门铃本地通知：完成；App 被彻底杀死后的云推送待 Phase B。
+- App 前台来电页与后台进程存活时的系统通知：完成；进程被杀后不通知是当前确认需求。
+- 多设备类型与图标资产：App、APK、网关和节点固件构建已通过，手机布局与启动图标已验证。
+- 云端设备模型：首个 FastAPI + SQLite + MQTT 兼容切片完成，待接入 App 登录和固件原生 LWT/消息版本。
 - Matter over WiFi：待开始。
 - Thread：等待 ESP32-C6/H2 硬件。
 

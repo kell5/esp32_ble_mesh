@@ -34,6 +34,7 @@
 #define MESH_TOKEN_VALUE        (0xbeef)
 #define MESH_CONTROL_CMD        (0x2)
 #define MESH_STATUS_CMD         (0x3)   /* node -> root: per-node status report */
+#define MESH_DEVICE_TYPE_MAX_LEN (24)
 
 /*******************************************************
  *                Structures
@@ -45,14 +46,16 @@ typedef struct {
     uint16_t token_value;
 } mesh_light_ctl_t;
 
-/* Status packet a node sends upstream to the root (MESH_DATA_TODS).
-   Fixed-width fields keep the wire layout unambiguous across nodes. */
+/* Status packet a node sends upstream to the root with MESH_DATA_P2P.
+   device_type is appended so roots remain compatible with legacy packets that
+   contain only the fields before it. */
 typedef struct {
     uint8_t cmd;        /* MESH_STATUS_CMD */
-    uint8_t on;         /* current light state: 0 = off, 1 = on */
+    uint8_t on;         /* current on/off state */
     uint8_t mac[6];     /* node STA MAC — identity */
     uint8_t layer;      /* mesh layer */
     uint8_t is_root;    /* 1 if this node is the root */
+    char device_type[MESH_DEVICE_TYPE_MAX_LEN];
 } mesh_light_status_t;
 
 /*******************************************************

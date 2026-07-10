@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <stdio.h>
 #include <inttypes.h>
+#include <stddef.h>
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "esp_event.h"
@@ -20,6 +21,7 @@
 #include "mesh_light.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #ifdef CONFIG_MESH_GATEWAY_PROVISIONING
@@ -68,12 +70,16 @@ static esp_netif_t *netif_sta = NULL;
 
 static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 static bool s_mqtt_started = false;
+static uint32_t s_status_boot_nonce = 0;
+static uint32_t s_status_sequence = 0;
+static char s_gateway_lwt_payload[224];
 
 /*******************************************************
  *   Per-node registry (maintained on the root)
  *******************************************************/
 #define MAX_NODES               CONFIG_MESH_ROUTE_TABLE_SIZE
 #define NODE_OFFLINE_TIMEOUT_US (30LL * 1000 * 1000)  /* mark offline after 30s silence */
+#define MESH_STATUS_BASE_SIZE   offsetof(mesh_light_status_t, device_type)
 
 typedef struct {
     bool used;
@@ -83,6 +89,7 @@ typedef struct {
     uint8_t on;            /* last known light state */
     uint8_t layer;
     uint8_t is_root;
+    char device_type[MESH_DEVICE_TYPE_MAX_LEN];
     int64_t last_seen_us;
 } node_entry_t;
 
@@ -121,6 +128,22 @@ static void node_id_str(const uint8_t mac[6], char *out, size_t max)
     snprintf(out, max, "node-%02X%02X%02X", mac[3], mac[4], mac[5]);
 }
 
+static void status_message_id(const char *device_id, char *out, size_t max)
+{
+    uint32_t sequence = __atomic_add_fetch(&s_status_sequence, 1, __ATOMIC_RELAXED);
+    snprintf(out, max, "%s-%08" PRIx32 "-%" PRIu32,
+             device_id, s_status_boot_nonce, sequence);
+}
+
+static void gateway_lwt_payload_init(const char *root_id)
+{
+    char message_id[48];
+    status_message_id(root_id, message_id, sizeof(message_id));
+    snprintf(s_gateway_lwt_payload, sizeof(s_gateway_lwt_payload),
+             "{\"version\":1,\"message_id\":\"%s\",\"online\":false,\"root\":\"%s\",\"type\":\"gateway\",\"offline_reason\":\"mqtt_lwt\"}",
+             message_id, root_id);
+}
+
 static inline void nodes_lock(void)   { if (s_nodes_mtx) xSemaphoreTake(s_nodes_mtx, portMAX_DELAY); }
 static inline void nodes_unlock(void) { if (s_nodes_mtx) xSemaphoreGive(s_nodes_mtx); }
 
@@ -155,11 +178,14 @@ static void root_publish_node_status(const node_entry_t *n)
     node_id_str(n->mac, id, sizeof(id));
     char topic[64];
     snprintf(topic, sizeof(topic), MQTT_TOPIC_NODE_PREFIX "%s/status", id);
-    char payload[192];
+    char message_id[48];
+    status_message_id(id, message_id, sizeof(message_id));
+    const char *offline = n->online ? "" : ",\"offline_reason\":\"mesh_timeout\"";
+    char payload[352];
     snprintf(payload, sizeof(payload),
-             "{\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\"}",
-             id, n->online ? "true" : "false", n->on ? "on" : "off",
-             n->layer, n->is_root ? "root" : "node");
+             "{\"version\":1,\"message_id\":\"%s\",\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\",\"type\":\"%s\"%s}",
+             message_id, id, n->online ? "true" : "false", n->on ? "on" : "off",
+             n->layer, n->is_root ? "root" : "node", n->device_type, offline);
     esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
 }
 
@@ -182,15 +208,19 @@ static void root_publish_gateway_status(void)
 
     char root_id[16];
     node_id_str(s_self_mac, root_id, sizeof(root_id));
-    char payload[224];
+    char message_id[48];
+    status_message_id(root_id, message_id, sizeof(message_id));
+    char payload[320];
     snprintf(payload, sizeof(payload),
-             "{\"online\":true,\"root\":\"%s\",\"layer\":%d,\"nodes\":%d,\"online_nodes\":%d,\"heap\":%" PRId32 "}",
-             root_id, mesh_layer, total, online, esp_get_minimum_free_heap_size());
+             "{\"version\":1,\"message_id\":\"%s\",\"online\":true,\"root\":\"%s\",\"layer\":%d,\"nodes\":%d,\"online_nodes\":%d,\"heap\":%" PRId32 "}",
+             message_id, root_id, mesh_layer, total, online, esp_get_minimum_free_heap_size());
     esp_mqtt_client_publish(s_mqtt_client, MQTT_TOPIC_GATEWAY_STAT, payload, 0, 1, 1);
 }
 
 /* Root: record/refresh a node from an upstream status packet, then publish. */
-static void root_handle_node_status(const mesh_addr_t *from, const mesh_light_status_t *st)
+static void root_handle_node_status(const mesh_addr_t *from,
+                                    const mesh_light_status_t *st,
+                                    size_t packet_size)
 {
     if (!from || !st) {
         return;
@@ -207,6 +237,18 @@ static void root_handle_node_status(const mesh_addr_t *from, const mesh_light_st
     s_nodes[idx].on = st->on ? 1 : 0;
     s_nodes[idx].layer = st->layer;
     s_nodes[idx].is_root = st->is_root ? 1 : 0;
+    memset(s_nodes[idx].device_type, 0, sizeof(s_nodes[idx].device_type));
+    if (packet_size > MESH_STATUS_BASE_SIZE) {
+        size_t available = packet_size - MESH_STATUS_BASE_SIZE;
+        size_t copy_len = available < sizeof(s_nodes[idx].device_type) - 1
+                              ? available
+                              : sizeof(s_nodes[idx].device_type) - 1;
+        memcpy(s_nodes[idx].device_type, st->device_type, copy_len);
+    }
+    if (s_nodes[idx].device_type[0] == '\0') {
+        strlcpy(s_nodes[idx].device_type, "light_bulb",
+                sizeof(s_nodes[idx].device_type));
+    }
     s_nodes[idx].online = true;
     s_nodes[idx].last_seen_us = esp_timer_get_time();
     snapshot = s_nodes[idx];
@@ -225,6 +267,8 @@ static void root_refresh_self(void)
         s_nodes[idx].on = s_light_state;
         s_nodes[idx].layer = mesh_layer;
         s_nodes[idx].is_root = 1;
+        strlcpy(s_nodes[idx].device_type, "gateway",
+                sizeof(s_nodes[idx].device_type));
         s_nodes[idx].online = true;
         s_nodes[idx].last_seen_us = esp_timer_get_time();
         snapshot = s_nodes[idx];
@@ -270,6 +314,7 @@ static void send_status_upstream(void)
         .is_root = 0,
     };
     memcpy(st.mac, s_self_mac, 6);
+    strlcpy(st.device_type, CONFIG_MESH_DEVICE_TYPE, sizeof(st.device_type));
     mesh_data_t data = {
         .data = (uint8_t *)&st,
         .size = sizeof(st),
@@ -340,8 +385,9 @@ void esp_mesh_p2p_rx_main(void *arg)
            - MESH_STATUS_CMD (upstream node report): only the root aggregates it.
            - otherwise treat as a light-control message and apply it locally. */
         if (data.size >= 1 && data.data[0] == MESH_STATUS_CMD) {
-            if (esp_mesh_is_root() && data.size >= sizeof(mesh_light_status_t)) {
-                root_handle_node_status(&from, (mesh_light_status_t *)data.data);
+            if (esp_mesh_is_root() && data.size >= MESH_STATUS_BASE_SIZE) {
+                root_handle_node_status(&from, (mesh_light_status_t *)data.data,
+                                        data.size);
             }
             continue;
         }
@@ -588,11 +634,23 @@ static void mqtt_app_start(void)
         return;
     }
 
+    if (s_status_boot_nonce == 0) {
+        s_status_boot_nonce = esp_random();
+    }
+    char root_id[16];
+    node_id_str(s_self_mac, root_id, sizeof(root_id));
+    gateway_lwt_payload_init(root_id);
+
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKERADDRESS,
         .credentials.client_id = MQTT_CLIENT_ID,
         .credentials.username = MQTT_USER_NAME,
         .credentials.authentication.password = MQTT_PASSWD,
+        .session.last_will.topic = MQTT_TOPIC_GATEWAY_STAT,
+        .session.last_will.msg = s_gateway_lwt_payload,
+        .session.last_will.msg_len = 0,
+        .session.last_will.qos = 1,
+        .session.last_will.retain = 1,
     };
 
     s_mqtt_client = esp_mqtt_client_init(&mqtt_cfg);

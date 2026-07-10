@@ -3,14 +3,16 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 
 import '../services/mqtt_service.dart';
+import '../widgets/device_icon.dart';
 import '../widgets/smart_cards.dart';
 
-/// Detail / control sub-page for a single mesh device (light today). Stays
-/// subscribed so the state tracks the gateway's retained status. Extra
-/// capabilities (brightness, colour temperature, schedules) can be added here
-/// without touching the home grid.
+/// Detail and control page for a single mesh device.
 class LightDetailPage extends StatefulWidget {
-  const LightDetailPage({super.key, required this.mqtt, required this.deviceId});
+  const LightDetailPage({
+    super.key,
+    required this.mqtt,
+    required this.deviceId,
+  });
 
   final MqttService mqtt;
   final String deviceId;
@@ -20,8 +22,8 @@ class LightDetailPage extends StatefulWidget {
 }
 
 class _LightDetailPageState extends State<LightDetailPage> {
-  LightDevice? _device;
-  StreamSubscription<List<LightDevice>>? _sub;
+  MeshDevice? _device;
+  StreamSubscription<List<MeshDevice>>? _sub;
 
   @override
   void initState() {
@@ -33,7 +35,7 @@ class _LightDetailPageState extends State<LightDetailPage> {
     });
   }
 
-  LightDevice? _find(List<LightDevice> list) {
+  MeshDevice? _find(List<MeshDevice> list) {
     for (final d in list) {
       if (d.id == widget.deviceId) return d;
     }
@@ -51,17 +53,19 @@ class _LightDetailPageState extends State<LightDetailPage> {
     if (d == null) return;
     final value = !d.on;
     widget.mqtt.setNodeLight(d.id, value);
-    setState(() => _device = LightDevice(
-          id: d.id,
-          on: value,
-          online: d.online,
-          layer: d.layer,
-          role: d.role,
-          type: d.type,
-          name: d.name,
-          value: d.value,
-          updatedAt: d.updatedAt,
-        ));
+    setState(
+      () => _device = MeshDevice(
+        id: d.id,
+        on: value,
+        online: d.online,
+        layer: d.layer,
+        role: d.role,
+        type: d.type,
+        name: d.name,
+        value: d.value,
+        updatedAt: d.updatedAt,
+      ),
+    );
   }
 
   @override
@@ -82,14 +86,14 @@ class _LightDetailPageState extends State<LightDetailPage> {
                   const SizedBox(height: 16),
                   _infoCard(d),
                   const SizedBox(height: 16),
-                  _futureCard(),
+                  _futureCard(d),
                 ],
               ),
       ),
     );
   }
 
-  Widget _heroToggle(LightDevice d) {
+  Widget _heroToggle(MeshDevice d) {
     final active = d.online && d.on;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 28),
@@ -99,33 +103,33 @@ class _LightDetailPageState extends State<LightDetailPage> {
       ),
       child: Column(
         children: [
-          Icon(
-            active ? CupertinoIcons.lightbulb_fill : CupertinoIcons.lightbulb,
-            size: 72,
-            color: !d.online
-                ? CupertinoColors.systemGrey3
-                : (active
-                    ? CupertinoColors.systemYellow
-                    : CupertinoColors.systemGrey),
+          DeviceIcon(
+            type: d.type,
+            online: d.online,
+            on: d.on,
+            size: 148,
+            borderRadius: 24,
           ),
           const SizedBox(height: 14),
           Text(
-            !d.online ? '离线' : (d.on ? '已开启' : '已关闭'),
+            d.type.stateLabel(online: d.online, on: d.on),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
-          const SizedBox(height: 18),
-          PowerButton(
-            on: active,
-            enabled: d.online,
-            onPressed: _toggle,
-            size: 64,
-          ),
+          if (d.type.isControllable) ...[
+            const SizedBox(height: 18),
+            PowerButton(
+              on: active,
+              enabled: d.online,
+              onPressed: _toggle,
+              size: 64,
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _infoCard(LightDevice d) {
+  Widget _infoCard(MeshDevice d) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
@@ -135,6 +139,8 @@ class _LightDetailPageState extends State<LightDetailPage> {
       child: Column(
         children: [
           _row('设备 ID', d.id),
+          _divider(),
+          _row('设备类型', d.type.label),
           _divider(),
           _row('角色', d.isRoot ? '网关 (root)' : '节点'),
           _divider(),
@@ -148,7 +154,18 @@ class _LightDetailPageState extends State<LightDetailPage> {
     );
   }
 
-  Widget _futureCard() {
+  Widget _futureCard(MeshDevice d) {
+    final description = switch (d.type) {
+      DeviceType.lightBulb ||
+      DeviceType.ceilingLight ||
+      DeviceType.lightStrip => '亮度、色温和场景将在固件上报对应能力后启用。',
+      DeviceType.wallSwitch || DeviceType.relay => '可继续扩展按键模式、定时、联动规则和上电状态。',
+      DeviceType.socket => '可继续扩展定时、倒计时、电量统计和过载保护。',
+      DeviceType.curtainMotor => '可继续扩展开合百分比、行程校准和反向设置。',
+      DeviceType.valve => '可继续扩展开度、自动关闭和安全告警。',
+      DeviceType.doorLock => '可继续扩展临时密码、开锁记录和异常告警。',
+      _ => '设备能力将在固件上报后显示在此页面。',
+    };
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -156,15 +173,19 @@ class _LightDetailPageState extends State<LightDetailPage> {
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
-        children: const [
-          Icon(CupertinoIcons.slider_horizontal_3,
-              color: CupertinoColors.systemGrey),
-          SizedBox(width: 10),
+        children: [
+          const Icon(
+            CupertinoIcons.slider_horizontal_3,
+            color: CupertinoColors.systemGrey,
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Text(
-              '亮度 / 色温 / 定时等功能：待设备固件上报对应能力后在此扩展。',
-              style:
-                  TextStyle(color: CupertinoColors.systemGrey, fontSize: 12),
+              description,
+              style: const TextStyle(
+                color: CupertinoColors.systemGrey,
+                fontSize: 12,
+              ),
             ),
           ),
         ],
@@ -173,18 +194,22 @@ class _LightDetailPageState extends State<LightDetailPage> {
   }
 
   Widget _row(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        child: Row(
-          children: [
-            Text(k, style: const TextStyle(fontSize: 15)),
-            const Spacer(),
-            Text(v,
-                style: const TextStyle(
-                    fontSize: 15, color: CupertinoColors.systemGrey)),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 14),
+    child: Row(
+      children: [
+        Text(k, style: const TextStyle(fontSize: 15)),
+        const Spacer(),
+        Text(
+          v,
+          style: const TextStyle(
+            fontSize: 15,
+            color: CupertinoColors.systemGrey,
+          ),
         ),
-      );
+      ],
+    ),
+  );
 
-  Widget _divider() => Container(
-      height: 0.5, color: CupertinoColors.systemGrey5);
+  Widget _divider() =>
+      Container(height: 0.5, color: CupertinoColors.systemGrey5);
 }

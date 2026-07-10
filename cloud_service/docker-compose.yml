@@ -1,0 +1,31 @@
+services:
+  cloud_service:
+    build:
+      context: .
+      args:
+        # Override in .env for restricted networks (e.g. a local PyPI mirror).
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+    image: mesh-cloud-service:latest
+    container_name: mesh-cloud-service
+    restart: unless-stopped
+    ports:
+      # Bind:Host:Container. Set CLOUD_BIND_ADDR=127.0.0.1 to expose only to a
+      # local TLS reverse proxy; leave 0.0.0.0 to publish directly.
+      - "${CLOUD_BIND_ADDR:-0.0.0.0}:${CLOUD_PUBLISH_PORT:-8000}:8000"
+    environment:
+      CLOUD_API_HOST: "0.0.0.0"
+      CLOUD_API_PORT: "8000"
+      CLOUD_DATABASE_PATH: "/data/cloud.db"
+      CLOUD_API_TOKEN: "${CLOUD_API_TOKEN:?set CLOUD_API_TOKEN in .env}"
+      CLOUD_MQTT_ENABLED: "${CLOUD_MQTT_ENABLED:-true}"
+      CLOUD_MQTT_HOST: "${CLOUD_MQTT_HOST:?set CLOUD_MQTT_HOST in .env}"
+      CLOUD_MQTT_PORT: "${CLOUD_MQTT_PORT:-1883}"
+      CLOUD_MQTT_USERNAME: "${CLOUD_MQTT_USERNAME:-}"
+      CLOUD_MQTT_PASSWORD: "${CLOUD_MQTT_PASSWORD:-}"
+      CLOUD_MQTT_CLIENT_ID: "${CLOUD_MQTT_CLIENT_ID:-mesh-cloud-service}"
+      CLOUD_STALE_AFTER_SECONDS: "${CLOUD_STALE_AFTER_SECONDS:-90}"
+    volumes:
+      - cloud_data:/data
+
+volumes:
+  cloud_data:
