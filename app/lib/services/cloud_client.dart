@@ -226,6 +226,19 @@ class CloudClient {
     return device;
   }
 
+  /// Remove (unclaim) a device from the logged-in account. The device stays
+  /// registered on the cloud but no longer belongs to this account, so it
+  /// disappears from the list and can be re-claimed later.
+  Future<void> unclaimDevice(String deviceId) async {
+    final response = await _send(
+      () => _http.delete(
+        _uri('/api/v1/me/devices/${Uri.encodeComponent(deviceId)}'),
+        headers: _headers,
+      ),
+    );
+    _ensureOk(response);
+  }
+
   Future<CloudShadow?> getShadow(String deviceId) async {
     final response = await _send(
       () => _http.get(

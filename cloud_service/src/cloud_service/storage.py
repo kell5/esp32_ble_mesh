@@ -46,6 +46,10 @@ class DeviceAlreadyClaimedError(RuntimeError):
     pass
 
 
+class DeviceNotOwnedError(RuntimeError):
+    pass
+
+
 class RoomNotFoundError(LookupError):
     pass
 
@@ -74,11 +78,24 @@ def _dump_object(value: dict[str, JsonValue]) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
+def _dump_string_list(value: list[str]) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
 def _load_object(raw: str) -> dict[str, JsonValue]:
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("stored JSON must be an object")
     return value
+
+
+def _load_string_list(raw: str | None) -> list[str]:
+    if raw is None:
+        return []
+    value = json.loads(raw)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _merge_object(
@@ -138,6 +155,7 @@ class DeviceStore:
                     type TEXT NOT NULL,
                     name TEXT,
                     room_id TEXT REFERENCES rooms(room_id) ON DELETE SET NULL,
+                    capabilities_json TEXT NOT NULL DEFAULT '[]',
                     metadata_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -269,6 +287,10 @@ class DeviceStore:
                     "ALTER TABLE devices ADD COLUMN room_id TEXT "
                     "REFERENCES rooms(room_id) ON DELETE SET NULL"
                 )
+            if "capabilities_json" not in device_columns:
+                connection.execute(
+                    "ALTER TABLE devices ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]'"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_devices_room ON devices(room_id)"
             )
@@ -279,6 +301,7 @@ class DeviceStore:
         device_type: str,
         name: str | None = None,
         metadata: dict[str, JsonValue] | None = None,
+        capabilities: list[str] | None = None,
     ) -> DeviceResponse:
         now = _utc_now().isoformat()
         metadata_patch = metadata or {}
@@ -287,13 +310,23 @@ class DeviceStore:
                 "SELECT metadata_json FROM devices WHERE device_id = ?", (device_id,)
             ).fetchone()
             if row is None:
+                capabilities_list = capabilities if capabilities else []
                 connection.execute(
                     """
                     INSERT INTO devices(
-                        device_id, owner_id, type, name, metadata_json, created_at, updated_at
-                    ) VALUES (?, NULL, ?, ?, ?, ?, ?)
+                        device_id, owner_id, type, name, metadata_json, capabilities_json,
+                        created_at, updated_at
+                    ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
                     """,
-                    (device_id, device_type, name, _dump_object(metadata_patch), now, now),
+                    (
+                        device_id,
+                        device_type,
+                        name,
+                        _dump_object(metadata_patch),
+                        _dump_string_list(capabilities_list),
+                        now,
+                        now,
+                    ),
                 )
                 connection.execute(
                     """
@@ -310,10 +343,21 @@ class DeviceStore:
                 connection.execute(
                     """
                     UPDATE devices
-                    SET type = ?, name = COALESCE(?, name), metadata_json = ?, updated_at = ?
+                    SET type = ?,
+                        name = COALESCE(?, name),
+                        metadata_json = ?,
+                        capabilities_json = COALESCE(?, capabilities_json),
+                        updated_at = ?
                     WHERE device_id = ?
                     """,
-                    (device_type, name, _dump_object(merged_metadata), now, device_id),
+                    (
+                        device_type,
+                        name,
+                        _dump_object(merged_metadata),
+                        None if capabilities is None else _dump_string_list(capabilities),
+                        now,
+                        device_id,
+                    ),
                 )
             return self._get_device(connection, device_id)
 
@@ -333,6 +377,21 @@ class DeviceStore:
                 (user_id, now, device_id),
             )
             return self._get_device(connection, device_id)
+
+    def unclaim_device(self, device_id: str, user_id: str) -> None:
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT owner_id FROM devices WHERE device_id = ?", (device_id,)
+            ).fetchone()
+            if row is None:
+                raise DeviceNotFoundError(device_id)
+            if row["owner_id"] != user_id:
+                raise DeviceNotOwnedError(device_id)
+            connection.execute(
+                "UPDATE devices SET owner_id = NULL, updated_at = ? WHERE device_id = ?",
+                (now, device_id),
+            )
 
     def get_device(self, device_id: str) -> DeviceResponse:
         with self._connection() as connection:
@@ -899,7 +958,13 @@ class DeviceStore:
 
     def _get_shadow(self, connection: sqlite3.Connection, device_id: str) -> ShadowResponse:
         row = connection.execute(
-            "SELECT * FROM device_shadows WHERE device_id = ?", (device_id,)
+            """
+            SELECT device_shadows.*, devices.capabilities_json
+            FROM device_shadows
+            JOIN devices ON devices.device_id = device_shadows.device_id
+            WHERE device_shadows.device_id = ?
+            """,
+            (device_id,),
         ).fetchone()
         if row is None:
             raise DeviceNotFoundError(device_id)
@@ -1102,6 +1167,7 @@ class DeviceStore:
         owner_value = row["owner_id"]
         name_value = row["name"]
         room_value = row["room_id"]
+        caps_raw = row["capabilities_json"]
         return DeviceResponse(
             device_id=str(row["device_id"]),
             owner_id=None if owner_value is None else str(owner_value),
@@ -1109,6 +1175,7 @@ class DeviceStore:
             name=None if name_value is None else str(name_value),
             room_id=None if room_value is None else str(room_value),
             metadata=_load_object(str(row["metadata_json"])),
+            capabilities=_load_string_list(None if caps_raw is None else str(caps_raw)),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
@@ -1119,6 +1186,7 @@ class DeviceStore:
         last_seen_value = row["last_seen_at"]
         return ShadowResponse(
             device_id=str(row["device_id"]),
+            capabilities=_load_string_list(str(row["capabilities_json"])),
             desired=_load_object(str(row["desired_json"])),
             reported=_load_object(str(row["reported_json"])),
             desired_version=int(row["desired_version"]),

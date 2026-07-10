@@ -7,7 +7,8 @@
 - GitHub：`https://github.com/kell5/esp32_ble_mesh`
 - 主分支：`main`
 - 最近更新：`2026-07-10`
-- 当前开发主题：Phase B 云端邮箱账号体系 + App 注册/登录/设备认领 + 门铃事件记录
+- 当前开发主题：Phase B 云端邮箱账号体系 + App 注册/登录/设备认领 + 门铃事件记录（已完成、已部署）
+- 下一阶段规划：见 `docs/PRODUCT_ARCHITECTURE_AND_ROADMAP.md`（账号优先 UX、配网即绑定、WebRTC 媒体、OTA、协议规约；已按模块解耦成可并行任务）
 
 ## 1. 产品目标
 
@@ -296,6 +297,14 @@ Flutter App
 7. 设计 Phase B 的设备注册、影子、LWT、OTA、房间和自动化接口。
 8. 准备 Matter over WiFi 灯/插座演示节点。
 
+### 下一阶段（已规划，见 `docs/PRODUCT_ARCHITECTURE_AND_ROADMAP.md`）
+
+已确认四项决策：账号优先单一范式、配网即绑定、媒体走 WebRTC、对标 ESP RainMaker。任务已解耦（每个带依赖/边界/契约/验收自检），可多 AI 并行：
+- P0：`T-APP-BACK`（返回键修复，本轮执行）、`T-APP-UX`（账号优先 UX 重构）。
+- P1：`T-CLOUD-1` capability 模型、`T-CLOUD-2` MQTT 规范化+兼容双订阅、`T-CLOUD-3` OTA 服务端。
+- P2：`T-FW-CONTRACT` 固件对齐协议、`T-FW-PROVISION-BIND` 配网回传 device_id、`T-FW-OTA-HTTPS`、`T-FW-OTA-MESH`。
+- P3：`T-MEDIA-WEBRTC`、`T-APP-ADDDEV`。
+
 ## 11. 新会话恢复步骤
 
 新会话不要直接改代码，按顺序执行：
@@ -309,6 +318,7 @@ Flutter App
 ## 12. 文档索引
 
 - `docs/DEVELOPMENT_PROGRESS.md`：总进度和会话交接（本文件）。
+- `docs/PRODUCT_ARCHITECTURE_AND_ROADMAP.md`：产品架构与协议规约 / 路线图（账号优先、配网绑定、WebRTC、OTA、解耦任务分点+验收要点，供多 AI 并行）。
 - `docs/DEVICE_ASSET_STATUS.md`：已识别图片、缺失素材、App 映射、固件 `type` 协议和测试步骤。
 - `docs/APP_DEVICE_ICON_PROMPTS.md`：设备图标视觉规范与类型描述。
 - `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成的完整可复制提示词。

@@ -5,8 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../services/doorbell_notification_service.dart';
 import '../services/mqtt_service.dart';
-import 'cloud_devices_page.dart';
-import 'home_page.dart';
+import 'home_shell.dart';
 import 'incoming_call_page.dart';
 
 /// Owns the shared [MqttService], connects on startup, and presents the
@@ -20,7 +19,6 @@ class RootPage extends StatefulWidget {
 
 class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
   final MqttService _mqtt = MqttService();
-  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
   StreamSubscription<DoorbellEvent>? _eventSub;
   StreamSubscription<String>? _notificationSub;
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
@@ -71,10 +69,8 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
 
   void _showIncomingCall() {
     if (_callVisible || !mounted) return;
-    final navigator = _navKey.currentState;
-    if (navigator == null) return;
     _callVisible = true;
-    navigator
+    Navigator.of(context, rootNavigator: true)
         .push(
           CupertinoPageRoute<void>(
             fullscreenDialog: true,
@@ -93,54 +89,13 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    // Nested navigator lets the incoming-call screen overlay the tab bar.
-    return Navigator(
-      key: _navKey,
-      onGenerateRoute: (_) =>
-          CupertinoPageRoute<void>(builder: (_) => _MainTabs(mqtt: _mqtt)),
-    );
-  }
-}
-
-/// Bottom tab bar: the local MQTT device home and the cloud device registry.
-///
-/// The Android system back button is handled explicitly so it never quits the
-/// app on the first press: it first pops any pushed page inside the active
-/// tab, then falls back to the first tab, and only then asks to exit.
-class _MainTabs extends StatefulWidget {
-  const _MainTabs({required this.mqtt});
-
-  final MqttService mqtt;
-
-  @override
-  State<_MainTabs> createState() => _MainTabsState();
-}
-
-class _MainTabsState extends State<_MainTabs> {
-  final CupertinoTabController _tab = CupertinoTabController();
-  final List<GlobalKey<NavigatorState>> _navKeys = [
-    GlobalKey<NavigatorState>(),
-    GlobalKey<NavigatorState>(),
-  ];
-
-  @override
-  void dispose() {
-    _tab.dispose();
-    super.dispose();
-  }
-
+  /// Handles the Android system back button / left-swipe while the account
+  /// content is the front-most route. Device detail pages and the full-screen
+  /// incoming-call overlay are pushed onto the [CupertinoApp] root navigator,
+  /// so the system pops those first on its own; this [PopScope] (attached to
+  /// the home route) only runs once nothing is left to pop, and then asks to
+  /// exit instead of quitting on the first press.
   Future<void> _handleBack() async {
-    final navigator = _navKeys[_tab.index].currentState;
-    if (navigator != null && navigator.canPop()) {
-      navigator.pop();
-      return;
-    }
-    if (_tab.index != 0) {
-      setState(() => _tab.index = 0);
-      return;
-    }
     final shouldExit = await _confirmExit();
     if (shouldExit) await SystemNavigator.pop();
   }
@@ -169,35 +124,20 @@ class _MainTabsState extends State<_MainTabs> {
 
   @override
   Widget build(BuildContext context) {
+    // [AppShell] is the home route of the CupertinoApp root navigator; pushed
+    // pages (device detail / incoming-call overlay) go on that same navigator,
+    // so the OS back button pops them on its own. This [PopScope] guards only
+    // the home route: with nothing left to pop it prompts to exit rather than
+    // quitting immediately. Wrapping the content in a nested [Navigator] here
+    // would let that inner navigator swallow the back button and quit the app
+    // once its stack is empty, which is the regression this avoids.
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         _handleBack();
       },
-      child: CupertinoTabScaffold(
-        controller: _tab,
-        tabBar: CupertinoTabBar(
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(CupertinoIcons.house_fill),
-              label: '我的设备',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(CupertinoIcons.cloud_fill),
-              label: '云端',
-            ),
-          ],
-        ),
-        tabBuilder: (context, index) {
-          return CupertinoTabView(
-            navigatorKey: _navKeys[index],
-            builder: (_) => index == 0
-                ? HomePage(mqtt: widget.mqtt)
-                : const CloudDevicesPage(),
-          );
-        },
-      ),
+      child: AppShell(mqtt: _mqtt),
     );
   }
 }

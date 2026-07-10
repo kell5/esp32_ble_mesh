@@ -3,13 +3,20 @@ import 'package:flutter/cupertino.dart';
 import '../services/cloud_client.dart';
 import '../services/cloud_session.dart';
 
-/// Email account gate for the cloud tab. The user enters the service base URL
-/// plus an email + password, and either registers a new account or logs in.
-/// On success a per-user bearer token is persisted in [CloudSession].
+/// Email account gate. The user enters the service base URL plus an email +
+/// password, and either registers a new account or logs in. On success a
+/// per-user bearer token is persisted in [CloudSession] and [onAuthenticated]
+/// is invoked so the shell can swap in the device list. When used as a pushed
+/// route (no callback) it pops `true` instead.
 class CloudLoginPage extends StatefulWidget {
-  const CloudLoginPage({super.key, required this.session});
+  const CloudLoginPage({
+    super.key,
+    required this.session,
+    this.onAuthenticated,
+  });
 
   final CloudSession session;
+  final VoidCallback? onAuthenticated;
 
   @override
   State<CloudLoginPage> createState() => _CloudLoginPageState();
@@ -78,7 +85,12 @@ class _CloudLoginPageState extends State<CloudLoginPage> {
         ..email = auth.email;
       await widget.session.save();
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      final onAuthenticated = widget.onAuthenticated;
+      if (onAuthenticated != null) {
+        onAuthenticated();
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } on CloudApiException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.message);
@@ -158,7 +170,7 @@ class _CloudLoginPageState extends State<CloudLoginPage> {
             const Padding(
               padding: EdgeInsets.fromLTRB(4, 18, 4, 0),
               child: Text(
-                '每个账号是独立的设备空间：登录后在“云端”页添加（认领）属于你的设备，'
+                '每个账号是独立的设备空间：登录后添加（认领）属于你的设备，'
                 '之后无需连接硬件即可远程查看与控制。登录凭据仅保存在本机。',
                 style: TextStyle(color: CupertinoColors.systemGrey, fontSize: 12),
               ),

@@ -1,24 +1,40 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 
 import '../services/cloud_client.dart';
 import '../services/cloud_session.dart';
+import '../services/mqtt_service.dart';
 import '../widgets/device_icon.dart';
 import '../widgets/smart_cards.dart';
 import 'cloud_device_detail_page.dart';
-import 'cloud_login_page.dart';
+import 'doorbell_page.dart';
+import 'gateway_detail_page.dart';
+import 'provisioning_page.dart';
 
-/// Cloud tab root. When not logged in it shows a login prompt; once a session
-/// exists it lists the user's cloud devices with their shadow state and lets
-/// controllable devices be toggled via the desired shadow.
+/// The single unified device list. Its data source is the logged-in account
+/// (`GET /me/devices`); the local MQTT network is only a transparent transport
+/// layer used to accelerate control when the device is reachable on the LAN.
+/// Controllable devices toggle via that transport, doorbell/gateway devices
+/// open their live MQTT sub-pages, and everything else opens the cloud shadow
+/// detail page.
 class CloudDevicesPage extends StatefulWidget {
-  const CloudDevicesPage({super.key});
+  const CloudDevicesPage({
+    super.key,
+    required this.mqtt,
+    required this.session,
+    this.onLogout,
+  });
+
+  final MqttService mqtt;
+  final CloudSession session;
+  final VoidCallback? onLogout;
 
   @override
   State<CloudDevicesPage> createState() => _CloudDevicesPageState();
 }
 
 class _CloudDevicesPageState extends State<CloudDevicesPage> {
-  CloudSession? _session;
   CloudClient? _client;
   List<CloudDeviceView> _devices = const [];
   bool _loading = true;
@@ -27,7 +43,11 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
   @override
   void initState() {
     super.initState();
-    _bootstrap();
+    _client = CloudClient(
+      baseUrl: widget.session.baseUrl,
+      token: widget.session.token,
+    );
+    _refresh();
   }
 
   @override
@@ -36,27 +56,9 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
     super.dispose();
   }
 
-  Future<void> _bootstrap() async {
-    final session = await CloudSession.load();
-    if (!mounted) return;
-    setState(() => _session = session);
-    if (session.isLoggedIn) {
-      _rebuildClient(session);
-      await _refresh();
-    } else {
-      setState(() => _loading = false);
-    }
-  }
-
-  void _rebuildClient(CloudSession session) {
-    _client?.close();
-    _client = CloudClient(baseUrl: session.baseUrl, token: session.token);
-  }
-
   Future<void> _refresh() async {
-    final session = _session;
     final client = _client;
-    if (session == null || client == null || !session.isLoggedIn) return;
+    if (client == null) return;
     setState(() {
       _loading = true;
       _error = null;
@@ -77,38 +79,38 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
     }
   }
 
-  Future<void> _login() async {
-    final session = _session ?? CloudSession();
-    final ok = await Navigator.of(context).push<bool>(
-      CupertinoPageRoute<bool>(
-        builder: (_) => CloudLoginPage(session: session),
-      ),
-    );
-    if (ok == true && mounted) {
-      setState(() => _session = session);
-      _rebuildClient(session);
-      await _refresh();
-    }
+  Future<void> _logout() async {
+    await widget.session.clear();
+    _client?.close();
+    _client = null;
+    widget.onLogout?.call();
   }
 
-  Future<void> _logout() async {
-    await _session?.clear();
-    _client?.close();
-    if (!mounted) return;
-    setState(() {
-      _client = null;
-      _devices = const [];
-      _error = null;
-    });
+  /// True when the device is reachable on the local MQTT network right now, so
+  /// control can skip the cloud round-trip (transparent LAN acceleration).
+  bool _reachableLocally(String deviceId) {
+    if (!widget.mqtt.isConnected) return false;
+    return widget.mqtt.devicesSnapshot.any(
+      (d) => d.id == deviceId && d.online,
+    );
   }
 
   Future<void> _toggle(CloudDeviceView view) async {
+    final target = !view.on;
+    final deviceId = view.device.deviceId;
+    if (_reachableLocally(deviceId)) {
+      widget.mqtt.setNodeLight(deviceId, target);
+      // Let the node report back through the MQTT bridge, then re-read the
+      // shadow so the card reflects the confirmed state.
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await _refresh();
+      return;
+    }
     final client = _client;
     if (client == null) return;
-    final target = !view.on;
     try {
       await client.setDesired(
-        view.device.deviceId,
+        deviceId,
         {'on': target},
         messageId: 'app-${DateTime.now().millisecondsSinceEpoch}',
       );
@@ -119,67 +121,46 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
     }
   }
 
+  /// Opens the add-device screen (LAN auto-discovery + manual id + BLE
+  /// provisioning), then refreshes if anything was claimed.
   Future<void> _addDevice() async {
     final client = _client;
     if (client == null) return;
-    final controller = TextEditingController();
-    final deviceId = await showCupertinoDialog<String>(
-      context: context,
-      builder: (dialogContext) => CupertinoAlertDialog(
-        title: const Text('添加设备'),
-        content: Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '输入设备 ID 将其认领到当前账号。设备需已上电并上报云端。',
-                style: TextStyle(fontSize: 12, color: CupertinoColors.systemGrey),
-              ),
-              const SizedBox(height: 12),
-              CupertinoTextField(
-                controller: controller,
-                placeholder: '如 node-0B55C0 / door-001',
-                autofocus: true,
-                autocorrect: false,
-                enableSuggestions: false,
-              ),
-            ],
-          ),
+    final claimedIds = {for (final v in _devices) v.device.deviceId};
+    final changed = await Navigator.of(context).push<bool>(
+      CupertinoPageRoute<bool>(
+        builder: (_) => _AddDevicePage(
+          client: client,
+          mqtt: widget.mqtt,
+          claimedIds: claimedIds,
         ),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('取消'),
-          ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () =>
-                Navigator.of(dialogContext).pop(controller.text.trim()),
-            child: const Text('添加'),
-          ),
-        ],
       ),
     );
-    controller.dispose();
-    if (deviceId == null || deviceId.isEmpty) return;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      await client.claimDevice(deviceId);
-      await _refresh();
-    } on CloudApiException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.message;
-        _loading = false;
-      });
-    }
+    if (changed == true) await _refresh();
   }
 
   void _openDetail(CloudDeviceView view) {
+    final type = view.device.deviceType;
+    if (type == DeviceType.doorbell || type == DeviceType.camera) {
+      Navigator.of(context)
+          .push(
+            CupertinoPageRoute<void>(
+              builder: (_) => DoorbellPage(mqtt: widget.mqtt),
+            ),
+          )
+          .then((_) => _refresh());
+      return;
+    }
+    if (type == DeviceType.gateway) {
+      Navigator.of(context)
+          .push(
+            CupertinoPageRoute<void>(
+              builder: (_) => GatewayDetailPage(mqtt: widget.mqtt),
+            ),
+          )
+          .then((_) => _refresh());
+      return;
+    }
     final client = _client;
     if (client == null) return;
     Navigator.of(context)
@@ -197,35 +178,31 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
 
   @override
   Widget build(BuildContext context) {
-    final loggedIn = _session?.isLoggedIn ?? false;
     return CupertinoPageScaffold(
       backgroundColor: CupertinoColors.systemGroupedBackground,
       navigationBar: CupertinoNavigationBar(
-        middle: const Text('云端设备'),
-        trailing: loggedIn
-            ? Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CupertinoButton(
-                    padding: EdgeInsets.zero,
-                    onPressed: _addDevice,
-                    child: const Icon(CupertinoIcons.add_circled),
-                  ),
-                  CupertinoButton(
-                    padding: EdgeInsets.zero,
-                    onPressed: _showAccountSheet,
-                    child: const Icon(CupertinoIcons.person_crop_circle),
-                  ),
-                ],
-              )
-            : null,
+        middle: const Text('我的设备'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CupertinoButton(
+              padding: EdgeInsets.zero,
+              onPressed: _addDevice,
+              child: const Icon(CupertinoIcons.add_circled),
+            ),
+            CupertinoButton(
+              padding: EdgeInsets.zero,
+              onPressed: _showAccountSheet,
+              child: const Icon(CupertinoIcons.person_crop_circle),
+            ),
+          ],
+        ),
       ),
-      child: SafeArea(child: _body(loggedIn)),
+      child: SafeArea(child: _body()),
     );
   }
 
-  Widget _body(bool loggedIn) {
-    if (!loggedIn) return _loginPrompt();
+  Widget _body() {
     if (_loading && _devices.isEmpty) {
       return const Center(child: CupertinoActivityIndicator());
     }
@@ -282,45 +259,52 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
                       )
                     : null),
           onTap: () => _openDetail(view),
+          onLongPress: () => _confirmRemove(view),
         ),
     ];
+  }
+
+  /// Long-press a device card to remove (unclaim) it from the account.
+  void _confirmRemove(CloudDeviceView view) {
+    showCupertinoModalPopup<void>(
+      context: context,
+      builder: (sheetContext) => CupertinoActionSheet(
+        title: Text(view.device.displayName),
+        message: const Text('从当前账号移除该设备？设备本身不受影响，'
+            '之后可重新添加。'),
+        actions: [
+          CupertinoActionSheetAction(
+            isDestructiveAction: true,
+            onPressed: () {
+              Navigator.of(sheetContext).pop();
+              _removeDevice(view);
+            },
+            child: const Text('移除设备'),
+          ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.of(sheetContext).pop(),
+          child: const Text('取消'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _removeDevice(CloudDeviceView view) async {
+    final client = _client;
+    if (client == null) return;
+    try {
+      await client.unclaimDevice(view.device.deviceId);
+      await _refresh();
+    } on CloudApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.message);
+    }
   }
 
   String _subtitle(CloudDeviceView view) {
     final type = view.device.deviceType;
     return type.stateLabel(online: view.online, on: view.on);
-  }
-
-  Widget _loginPrompt() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              CupertinoIcons.cloud,
-              size: 64,
-              color: CupertinoColors.systemGrey2,
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              '登录云端以查看你名下的设备',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '云端设备注册表提供统一的在线状态与期望/上报影子，'
-              '可远程查看并控制已认领的设备。',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: CupertinoColors.systemGrey, fontSize: 13),
-            ),
-            const SizedBox(height: 20),
-            CupertinoButton.filled(onPressed: _login, child: const Text('登录云端')),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _emptyState() {
@@ -335,16 +319,17 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
           ),
           const SizedBox(height: 12),
           const Text(
-            '该用户名下暂无云端设备',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            '还没有设备',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 6),
           const Text(
-            '点右上角“+”输入设备 ID 认领设备（设备需已上电并上报云端）。下拉可刷新。',
+            '添加你的第一台设备：可从局域网自动发现、手动输入设备 ID，'
+            '或对全新设备蓝牙配网。下拉可刷新。',
             textAlign: TextAlign.center,
-            style: TextStyle(color: CupertinoColors.systemGrey, fontSize: 12),
+            style: TextStyle(color: CupertinoColors.systemGrey, fontSize: 13),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           CupertinoButton.filled(
             onPressed: _addDevice,
             child: const Text('添加设备'),
@@ -385,17 +370,15 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
   }
 
   void _showAccountSheet() {
-    final session = _session;
+    final session = widget.session;
     showCupertinoModalPopup<void>(
       context: context,
       builder: (sheetContext) => CupertinoActionSheet(
-        title: const Text('云端账户'),
-        message: session == null
-            ? null
-            : Text(
-                '${session.email.isEmpty ? session.userId : session.email}\n'
-                '${session.baseUrl}',
-              ),
+        title: const Text('账户'),
+        message: Text(
+          '${session.email.isEmpty ? session.userId : session.email}\n'
+          '${session.baseUrl}',
+        ),
         actions: [
           CupertinoActionSheetAction(
             onPressed: () {
@@ -403,13 +386,6 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
               _addDevice();
             },
             child: const Text('添加设备'),
-          ),
-          CupertinoActionSheetAction(
-            onPressed: () {
-              Navigator.of(sheetContext).pop();
-              _login();
-            },
-            child: const Text('切换账号 / 修改地址'),
           ),
           CupertinoActionSheetAction(
             isDestructiveAction: true,
@@ -424,6 +400,299 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
           onPressed: () => Navigator.of(sheetContext).pop(),
           child: const Text('取消'),
         ),
+      ),
+    );
+  }
+}
+
+/// Add-device screen: shows devices auto-discovered on the local MQTT network
+/// (that are not yet claimed to this account) for one-tap claim, keeps a manual
+/// device-id field, and offers a single BLE provisioning entry for brand-new
+/// (unconfigured) hardware. Pops `true` when a device was claimed so the caller
+/// refreshes the list.
+class _AddDevicePage extends StatefulWidget {
+  const _AddDevicePage({
+    required this.client,
+    required this.mqtt,
+    required this.claimedIds,
+  });
+
+  final CloudClient client;
+  final MqttService mqtt;
+  final Set<String> claimedIds;
+
+  @override
+  State<_AddDevicePage> createState() => _AddDevicePageState();
+}
+
+class _AddDevicePageState extends State<_AddDevicePage> {
+  final TextEditingController _manual = TextEditingController();
+  StreamSubscription<List<MeshDevice>>? _sub;
+  List<MeshDevice> _discovered = const [];
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _discovered = _filter(widget.mqtt.devicesSnapshot);
+    _sub = widget.mqtt.devices.listen((list) {
+      if (!mounted) return;
+      setState(() => _discovered = _filter(list));
+    });
+  }
+
+  List<MeshDevice> _filter(List<MeshDevice> list) =>
+      list.where((d) => !widget.claimedIds.contains(d.id)).toList();
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _manual.dispose();
+    super.dispose();
+  }
+
+  Future<void> _claim(String rawId) async {
+    final deviceId = rawId.trim();
+    if (deviceId.isEmpty || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.client.claimDevice(deviceId);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on CloudApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+    }
+  }
+
+  Future<void> _openProvisioning() async {
+    await Navigator.of(context).push(
+      CupertinoPageRoute<void>(builder: (_) => const ProvisioningPage()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoPageScaffold(
+      backgroundColor: CupertinoColors.systemGroupedBackground,
+      navigationBar: const CupertinoNavigationBar(middle: Text('添加设备')),
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            if (_error != null) _errorBanner(_error!),
+            _sectionHeader(
+              '自动发现（局域网）',
+              trailing: _busy
+                  ? const CupertinoActivityIndicator(radius: 8)
+                  : null,
+            ),
+            _discoverySection(),
+            _sectionHeader('手动添加'),
+            _manualSection(),
+            _sectionHeader('全新设备'),
+            _provisioningSection(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String text, {Widget? trailing}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
+      child: Row(
+        children: [
+          Text(
+            text,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: CupertinoColors.systemGrey,
+            ),
+          ),
+          const Spacer(),
+          ?trailing,
+        ],
+      ),
+    );
+  }
+
+  Widget _card({required Widget child}) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: CupertinoColors.systemBackground,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _discoverySection() {
+    if (_discovered.isEmpty) {
+      return _card(
+        child: const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text(
+            '未发现局域网内可添加的新设备。请确保设备已上电，并与手机处于同一网络。',
+            style: TextStyle(fontSize: 13, color: CupertinoColors.systemGrey),
+          ),
+        ),
+      );
+    }
+    return _card(
+      child: Column(
+        children: [
+          for (var i = 0; i < _discovered.length; i++) ...[
+            if (i > 0)
+              Container(
+                margin: const EdgeInsets.only(left: 60),
+                height: 1,
+                color: CupertinoColors.separator,
+              ),
+            _discoveredRow(_discovered[i]),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _discoveredRow(MeshDevice device) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 40,
+            height: 40,
+            child: DeviceIcon(
+              type: device.type,
+              online: device.online,
+              on: device.on,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  device.displayName,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${device.id}  ·  ${device.online ? '在线' : '离线'}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: CupertinoColors.systemGrey,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          CupertinoButton(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            color: CupertinoColors.activeBlue,
+            borderRadius: BorderRadius.circular(16),
+            onPressed: _busy ? null : () => _claim(device.id),
+            child: const Text('添加', style: TextStyle(fontSize: 14)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _manualSection() {
+    return _card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            CupertinoTextField(
+              controller: _manual,
+              placeholder: '输入设备 ID，如 node-0B55C0 / door-001',
+              autocorrect: false,
+              enableSuggestions: false,
+              onSubmitted: (v) => _claim(v),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '设备需已上电并上报云端后方可认领。',
+              style: TextStyle(fontSize: 12, color: CupertinoColors.systemGrey),
+            ),
+            const SizedBox(height: 10),
+            CupertinoButton.filled(
+              onPressed: _busy ? null : () => _claim(_manual.text),
+              child: const Text('添加'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _provisioningSection() {
+    return _card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '设备尚未联网？通过蓝牙为全新设备配置 Wi‑Fi。',
+              style: TextStyle(fontSize: 12, color: CupertinoColors.systemGrey),
+            ),
+            const SizedBox(height: 10),
+            CupertinoButton(
+              color: CupertinoColors.activeBlue,
+              onPressed: _busy ? null : _openProvisioning,
+              child: const Text('蓝牙配网'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _errorBanner(String message) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: CupertinoColors.systemRed.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            CupertinoIcons.exclamationmark_triangle,
+            color: CupertinoColors.systemRed,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: CupertinoColors.systemRed,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
