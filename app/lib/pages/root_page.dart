@@ -21,6 +21,11 @@ class RootPage extends StatefulWidget {
 class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
   final MqttService _mqtt = MqttService();
   final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
+  final CupertinoTabController _tab = CupertinoTabController();
+  final List<GlobalKey<NavigatorState>> _tabNavKeys = [
+    GlobalKey<NavigatorState>(),
+    GlobalKey<NavigatorState>(),
+  ];
   StreamSubscription<DoorbellEvent>? _eventSub;
   StreamSubscription<String>? _notificationSub;
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
@@ -89,56 +94,29 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _eventSub?.cancel();
     _notificationSub?.cancel();
+    _tab.dispose();
     _mqtt.dispose();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    // Nested navigator lets the incoming-call screen overlay the tab bar.
-    return Navigator(
-      key: _navKey,
-      onGenerateRoute: (_) =>
-          CupertinoPageRoute<void>(builder: (_) => _MainTabs(mqtt: _mqtt)),
-    );
-  }
-}
-
-/// Bottom tab bar: the local MQTT device home and the cloud device registry.
-///
-/// The Android system back button is handled explicitly so it never quits the
-/// app on the first press: it first pops any pushed page inside the active
-/// tab, then falls back to the first tab, and only then asks to exit.
-class _MainTabs extends StatefulWidget {
-  const _MainTabs({required this.mqtt});
-
-  final MqttService mqtt;
-
-  @override
-  State<_MainTabs> createState() => _MainTabsState();
-}
-
-class _MainTabsState extends State<_MainTabs> {
-  final CupertinoTabController _tab = CupertinoTabController();
-  final List<GlobalKey<NavigatorState>> _navKeys = [
-    GlobalKey<NavigatorState>(),
-    GlobalKey<NavigatorState>(),
-  ];
-
-  @override
-  void dispose() {
-    _tab.dispose();
-    super.dispose();
-  }
-
+  /// Handles the Android system back button / left-swipe. This [PopScope] lives
+  /// at the [CupertinoApp] root navigator level (the only place that actually
+  /// receives the system pop), so it never quits the app on the first press:
+  /// it closes an overlay page, then a page pushed inside the active tab, then
+  /// falls back to the first tab, and only then asks to exit.
   Future<void> _handleBack() async {
-    final navigator = _navKeys[_tab.index].currentState;
-    if (navigator != null && navigator.canPop()) {
-      navigator.pop();
+    final overlayNavigator = _navKey.currentState;
+    if (overlayNavigator != null && overlayNavigator.canPop()) {
+      overlayNavigator.pop();
+      return;
+    }
+    final tabNavigator = _tabNavKeys[_tab.index].currentState;
+    if (tabNavigator != null && tabNavigator.canPop()) {
+      tabNavigator.pop();
       return;
     }
     if (_tab.index != 0) {
-      setState(() => _tab.index = 0);
+      _tab.index = 0;
       return;
     }
     final shouldExit = await _confirmExit();
@@ -169,35 +147,64 @@ class _MainTabsState extends State<_MainTabs> {
 
   @override
   Widget build(BuildContext context) {
+    // The PopScope must sit above the nested navigator so it registers with the
+    // CupertinoApp root navigator, which is what the OS back button targets.
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         _handleBack();
       },
-      child: CupertinoTabScaffold(
-        controller: _tab,
-        tabBar: CupertinoTabBar(
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(CupertinoIcons.house_fill),
-              label: '我的设备',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(CupertinoIcons.cloud_fill),
-              label: '云端',
-            ),
-          ],
+      // Nested navigator lets the incoming-call screen overlay the tab bar.
+      child: Navigator(
+        key: _navKey,
+        onGenerateRoute: (_) => CupertinoPageRoute<void>(
+          builder: (_) =>
+              _MainTabs(mqtt: _mqtt, tab: _tab, navKeys: _tabNavKeys),
         ),
-        tabBuilder: (context, index) {
-          return CupertinoTabView(
-            navigatorKey: _navKeys[index],
-            builder: (_) => index == 0
-                ? HomePage(mqtt: widget.mqtt)
-                : const CloudDevicesPage(),
-          );
-        },
       ),
+    );
+  }
+}
+
+/// Bottom tab bar: the local MQTT device home and the cloud device registry.
+///
+/// The tab controller and per-tab navigator keys are owned by [_RootPageState]
+/// so the root-level [PopScope] can drive the back-button behaviour.
+class _MainTabs extends StatelessWidget {
+  const _MainTabs({
+    required this.mqtt,
+    required this.tab,
+    required this.navKeys,
+  });
+
+  final MqttService mqtt;
+  final CupertinoTabController tab;
+  final List<GlobalKey<NavigatorState>> navKeys;
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoTabScaffold(
+      controller: tab,
+      tabBar: CupertinoTabBar(
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(CupertinoIcons.house_fill),
+            label: '我的设备',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(CupertinoIcons.cloud_fill),
+            label: '云端',
+          ),
+        ],
+      ),
+      tabBuilder: (context, index) {
+        return CupertinoTabView(
+          navigatorKey: navKeys[index],
+          builder: (_) =>
+              index == 0 ? HomePage(mqtt: mqtt) : const CloudDevicesPage(),
+        );
+      },
     );
   }
 }
