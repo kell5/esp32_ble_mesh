@@ -169,4 +169,30 @@ menu "Example Configuration"
         default 50
         help
             The number of devices over the network(max: 300).
+    config MESH_GATEWAY_PROVISIONING
+        bool "Enable BLE WiFi provisioning for this gateway build"
+        default n
+        help
+            Enable only for the dedicated gateway/root firmware profile. Mesh nodes
+            retain their automatic join behavior and do not start a provisioning service.
+
+    config MESH_PROV_NAME_PREFIX
+        string "Gateway provisioning device name prefix"
+        depends on MESH_GATEWAY_PROVISIONING
+        default "Gateway-"
+
+    config MESH_PROV_POP
+        string "Gateway provisioning proof-of-possession"
+        depends on MESH_GATEWAY_PROVISIONING
+        default "gateway1234"
+
+    config MESH_PROV_RESET_GPIO
+        int "Gateway provisioning reset GPIO"
+        depends on MESH_GATEWAY_PROVISIONING
+        range 0 48
+        default 0
+        help
+            Hold this active-low button for three seconds while running to erase
+            stored router credentials and restart BLE provisioning.
+
 endmenu

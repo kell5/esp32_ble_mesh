@@ -19,7 +19,8 @@ class AppConfig {
   // A1 局域网直连：手机与板子同一 WiFi，直接拉板子的 :81/stream。
   // A2 服务器中继：板子推帧到公网中继，App 拉 /stream/<id>，可远程观看。
   static const int cameraPort = 81; // 板子本机 MJPEG 端口 (A1)
-  static String cameraStreamUrl(String host) => 'http://$host:$cameraPort/stream';
+  static String cameraStreamUrl(String host) =>
+      'http://$host:$cameraPort/stream';
 
   static const String relayHost = '114.55.208.72';
   static const int relayPort = 8090;
@@ -32,12 +33,12 @@ class AppConfig {
   // 默认走中继（远程可用）；局域网可在设置里一键切换。
   static String get defaultStreamUrl => relayStreamUrl;
 
-  // ---- SoftAP WiFi provisioning (first boot / re-provision) ----
-  // 板子无存储 WiFi 时开热点 "<prefix><MAC后3字节>"，如 Doorbell-4C3408。
-  // 手机连上该热点后，App 通过 protocomm(SoftAP+Security1) 下发目标 WiFi。
-  static const String provSoftApPrefix = 'Doorbell-';
-  static const String provHost = '192.168.4.1'; // SoftAP 网关，protocomm HTTP 端点
-  static const String provPop = 'doorbell1234'; // 与固件 Kconfig EXAMPLE_PROV_POP 一致
+  // ---- Unified BLE/SoftAP WiFi provisioning ----
+  static const String doorbellProvPrefix = 'Doorbell-';
+  static const String gatewayProvPrefix = 'Gateway-';
+  static const String doorbellProvPop = 'doorbell1234';
+  static const String gatewayProvPop = 'gateway1234';
+  static const String provHost = '192.168.4.1';
 
   // ---- BLE-Mesh light control (matches internal_communication/ firmware) ----
   // Legacy global on/off (kept for backward compatibility).
@@ -64,7 +65,9 @@ class AppConfig {
       return null;
     }
     final id = topic.substring(
-        _lightNodePrefix.length, topic.length - '/status'.length);
+      _lightNodePrefix.length,
+      topic.length - '/status'.length,
+    );
     return id.isEmpty ? null : id;
   }
 }

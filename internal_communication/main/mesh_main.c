@@ -22,6 +22,12 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#ifdef CONFIG_MESH_GATEWAY_PROVISIONING
+#include "driver/gpio.h"
+#include "esp_wifi_default.h"
+#include "network_provisioning/manager.h"
+#include "network_provisioning/scheme_ble.h"
+#endif
 
 /*******************************************************
  *                Macros
@@ -841,6 +847,79 @@ void ip_event_handler(void *arg, esp_event_base_t event_base,
 
 }
 
+#ifdef CONFIG_MESH_GATEWAY_PROVISIONING
+static void gateway_build_service_name(char *out, size_t size)
+{
+    uint8_t mac[6] = {0};
+    ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA));
+    snprintf(out, size, "%s%02X%02X%02X",
+             CONFIG_MESH_PROV_NAME_PREFIX, mac[3], mac[4], mac[5]);
+}
+
+static void gateway_load_router_config(wifi_config_t *router_cfg)
+{
+    esp_netif_t *prov_netif = esp_netif_create_default_wifi_sta();
+    wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&wifi_cfg));
+
+    network_prov_mgr_config_t prov_cfg = {
+        .scheme = network_prov_scheme_ble,
+        .scheme_event_handler = NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
+    };
+    ESP_ERROR_CHECK(network_prov_mgr_init(prov_cfg));
+
+    bool provisioned = false;
+    ESP_ERROR_CHECK(network_prov_mgr_is_wifi_provisioned(&provisioned));
+    if (!provisioned) {
+        char service_name[32];
+        gateway_build_service_name(service_name, sizeof(service_name));
+        uint8_t service_uuid[] = {
+            0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+            0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
+        };
+        ESP_ERROR_CHECK(network_prov_scheme_ble_set_service_uuid(service_uuid));
+        ESP_LOGI(MESH_TAG, "gateway not provisioned -> BLE advertising as %s", service_name);
+        ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
+            NETWORK_PROV_SECURITY_1, CONFIG_MESH_PROV_POP, service_name, NULL));
+        network_prov_mgr_wait();
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_get_config(WIFI_IF_STA, router_cfg));
+    ESP_LOGI(MESH_TAG, "using provisioned router SSID: %s", router_cfg->sta.ssid);
+    ESP_ERROR_CHECK(network_prov_mgr_deinit());
+    esp_wifi_stop();
+    ESP_ERROR_CHECK(esp_wifi_deinit());
+    esp_netif_destroy_default_wifi(prov_netif);
+}
+
+static void gateway_provisioning_reset_task(void *arg)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << CONFIG_MESH_PROV_RESET_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&cfg));
+    int64_t pressed_at = 0;
+    while (true) {
+        if (gpio_get_level(CONFIG_MESH_PROV_RESET_GPIO) == 0) {
+            if (pressed_at == 0) pressed_at = esp_timer_get_time();
+            if (esp_timer_get_time() - pressed_at >= 3000000) {
+                ESP_LOGW(MESH_TAG, "resetting gateway WiFi provisioning");
+                ESP_ERROR_CHECK(esp_wifi_restore());
+                vTaskDelay(pdMS_TO_TICKS(300));
+                esp_restart();
+            }
+        } else {
+            pressed_at = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+#endif
+
 void app_main(void)
 {
     ESP_ERROR_CHECK(mesh_light_init());
@@ -849,6 +928,10 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     /*  event initialization */
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+#ifdef CONFIG_MESH_GATEWAY_PROVISIONING
+    wifi_config_t gateway_router_cfg = {0};
+    gateway_load_router_config(&gateway_router_cfg);
+#endif
     /*  create network interfaces for mesh (only station instance saved for further manipulation, soft AP instance ignored */
     ESP_ERROR_CHECK(esp_netif_create_default_wifi_mesh_netifs(&netif_sta, NULL));
     /*  wifi initialization */
@@ -887,11 +970,22 @@ void app_main(void)
     /* mesh ID */
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
+#ifdef CONFIG_MESH_GATEWAY_PROVISIONING
+    cfg.channel = 0;
+    cfg.router.ssid_len = strnlen((const char *)gateway_router_cfg.sta.ssid,
+                                  sizeof(gateway_router_cfg.sta.ssid));
+    memcpy((uint8_t *)&cfg.router.ssid, gateway_router_cfg.sta.ssid,
+           cfg.router.ssid_len);
+    memcpy((uint8_t *)&cfg.router.password, gateway_router_cfg.sta.password,
+           strnlen((const char *)gateway_router_cfg.sta.password,
+                   sizeof(gateway_router_cfg.sta.password)));
+#else
     cfg.channel = CONFIG_MESH_CHANNEL;
     cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
     memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
     memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
            strlen(CONFIG_MESH_ROUTER_PASSWD));
+#endif
     /* mesh softAP */
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
     cfg.mesh_ap.max_connection = CONFIG_MESH_AP_CONNECTIONS;
@@ -906,6 +1000,9 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_mesh_set_active_duty_cycle(CONFIG_MESH_PS_DEV_DUTY, CONFIG_MESH_PS_DEV_DUTY_TYPE));
     /* set the network active duty cycle. (default:10, -1, MESH_PS_NETWORK_DUTY_APPLIED_ENTIRE) */
     ESP_ERROR_CHECK(esp_mesh_set_network_duty_cycle(CONFIG_MESH_PS_NWK_DUTY, CONFIG_MESH_PS_NWK_DUTY_DURATION, CONFIG_MESH_PS_NWK_DUTY_RULE));
+#endif
+#ifdef CONFIG_MESH_GATEWAY_PROVISIONING
+    xTaskCreate(gateway_provisioning_reset_task, "gateway_prov_reset", 2048, NULL, 3, NULL);
 #endif
     ESP_LOGI(MESH_TAG, "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",

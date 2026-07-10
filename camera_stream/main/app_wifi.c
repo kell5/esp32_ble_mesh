@@ -4,16 +4,19 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
-#include "esp_wifi.h"
 #include "esp_event.h"
-#include "esp_system.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "driver/gpio.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
 #include "sdkconfig.h"
 
 #include "network_provisioning/manager.h"
+#ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
+#include "network_provisioning/scheme_ble.h"
+#else
 #include "network_provisioning/scheme_softap.h"
+#endif
 
 static const char *TAG = "app_wifi";
 
@@ -21,7 +24,6 @@ static const char *TAG = "app_wifi";
 
 static EventGroupHandle_t s_wifi_event_group;
 
-// Build the SoftAP service name as "<prefix><last 3 MAC bytes>", e.g. Doorbell-4C3408.
 static void build_service_name(char *out, size_t max)
 {
     uint8_t mac[6] = {0};
@@ -36,7 +38,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == NETWORK_PROV_EVENT) {
         switch (event_id) {
         case NETWORK_PROV_START:
-            ESP_LOGI(TAG, "provisioning started (join SoftAP, then send WiFi via app)");
+            ESP_LOGI(TAG, "provisioning started");
             break;
         case NETWORK_PROV_WIFI_CRED_RECV: {
             wifi_sta_config_t *cfg = (wifi_sta_config_t *)event_data;
@@ -44,14 +46,13 @@ static void event_handler(void *arg, esp_event_base_t event_base,
             break;
         }
         case NETWORK_PROV_WIFI_CRED_FAIL:
-            ESP_LOGW(TAG, "provisioning failed (wrong password or AP not found), retry from app");
+            ESP_LOGW(TAG, "provisioning failed, retry from app");
             break;
         case NETWORK_PROV_WIFI_CRED_SUCCESS:
             ESP_LOGI(TAG, "provisioning successful");
             break;
         case NETWORK_PROV_END:
-            ESP_LOGI(TAG, "provisioning finished, deinit manager");
-            network_prov_mgr_deinit();
+            ESP_LOGI(TAG, "provisioning finished");
             break;
         default:
             break;
@@ -59,7 +60,6 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        // Robust reconnect: keep retrying forever, never abort.
         ESP_LOGW(TAG, "disconnected, reconnecting...");
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_wifi_connect();
@@ -70,11 +70,6 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-// Forget the stored WiFi credentials and reboot into SoftAP provisioning.
-// Triggered at runtime (never at boot) by a long-press of the doorbell button
-// or by the MQTT "reprovision" command. Note: GPIO0 is the ESP32-S3 boot
-// strapping pin, so a boot-time hold would enter USB download mode instead of
-// the app -- that is why re-provisioning is a runtime action, not a boot hold.
 void app_wifi_reset_provisioning(void)
 {
     ESP_LOGW(TAG, "reset provisioning -> erasing stored WiFi and rebooting");
@@ -89,7 +84,9 @@ esp_err_t app_wifi_connect(void)
 
     ESP_ERROR_CHECK(esp_netif_init());
     esp_netif_create_default_wifi_sta();
+#ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_SOFTAP
     esp_netif_create_default_wifi_ap();
+#endif
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -102,8 +99,13 @@ esp_err_t app_wifi_connect(void)
                                                         &event_handler, NULL, NULL));
 
     network_prov_mgr_config_t prov_cfg = {
+#ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
+        .scheme = network_prov_scheme_ble,
+        .scheme_event_handler = NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM,
+#else
         .scheme = network_prov_scheme_softap,
         .scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE,
+#endif
     };
     ESP_ERROR_CHECK(network_prov_mgr_init(prov_cfg));
 
@@ -114,21 +116,27 @@ esp_err_t app_wifi_connect(void)
         char service_name[32];
         build_service_name(service_name, sizeof(service_name));
         const char *pop = CONFIG_EXAMPLE_PROV_POP;
-        ESP_LOGI(TAG, "not provisioned -> starting SoftAP provisioning, AP name: %s", service_name);
-        // Open SoftAP (no password); data channel is encrypted via Security1 + PoP.
+#ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
+        uint8_t service_uuid[] = {
+            0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+            0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
+        };
+        ESP_ERROR_CHECK(network_prov_scheme_ble_set_service_uuid(service_uuid));
+        ESP_LOGI(TAG, "not provisioned -> BLE advertising as %s", service_name);
+#else
+        ESP_LOGI(TAG, "not provisioned -> SoftAP name: %s", service_name);
+#endif
         ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
             NETWORK_PROV_SECURITY_1, (const void *)pop, service_name, NULL));
-        // Provisioning drives the STA connection; wait for it to complete then release manager.
         network_prov_mgr_wait();
-        network_prov_mgr_deinit();
+        ESP_ERROR_CHECK(network_prov_mgr_deinit());
     } else {
         ESP_LOGI(TAG, "already provisioned -> connecting with stored WiFi");
-        network_prov_mgr_deinit();
+        ESP_ERROR_CHECK(network_prov_mgr_deinit());
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_start());
     }
 
-    // Block until we obtain an IP (covers both fresh-provision and stored-creds paths).
     xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT,
                         pdFALSE, pdFALSE, portMAX_DELAY);
     return ESP_OK;
