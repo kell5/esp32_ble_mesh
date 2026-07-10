@@ -121,6 +121,22 @@ class CloudApiTest(unittest.TestCase):
         self.assertFalse(shadow["reported"]["online"])
         self.assertEqual(shadow["offline_reason"], "cloud_timeout")
 
+    def test_doorbell_lwt_updates_offline_shadow(self) -> None:
+        payload = json.dumps(
+            {
+                "version": 1,
+                "message_id": "door-001-boot-1",
+                "online": False,
+                "type": "doorbell",
+                "offline_reason": "mqtt_lwt",
+            }
+        ).encode()
+        self.app.state.mqtt_bridge.ingest("doorbell/door-001/status", payload)
+        shadow = self.client.get("/api/v1/devices/door-001/shadow", headers=self.headers).json()
+        self.assertFalse(shadow["reported"]["online"])
+        self.assertEqual(shadow["reported"]["version"], 1)
+        self.assertEqual(shadow["offline_reason"], "mqtt_lwt")
+
     def test_plain_doorbell_event_updates_shadow(self) -> None:
         self.app.state.mqtt_bridge.ingest("doorbell/door-001/event", b"ringing")
         shadow = self.client.get("/api/v1/devices/door-001/shadow", headers=self.headers).json()

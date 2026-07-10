@@ -47,7 +47,7 @@ menu "Camera Stream Configuration"
         string "Doorbell device id"
         default "door-001"
         help
-            Used to build the MQTT topics doorbell/<id>/event and doorbell/<id>/cmd.
+            Used to build the MQTT event, command, and retained status topics.
 
     config EXAMPLE_RELAY_HOST
         string "MJPEG relay host"

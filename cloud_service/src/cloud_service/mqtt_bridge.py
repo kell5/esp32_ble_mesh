@@ -99,6 +99,11 @@ class MqttBridge:
             self._ingest_gateway(document)
             return
 
+        doorbell_id = _topic_value(self._settings.mqtt_doorbell_status_filter, topic)
+        if doorbell_id is not None and isinstance(document, dict):
+            self._ingest_doorbell_status(doorbell_id, document)
+            return
+
         doorbell_id = _topic_value(self._settings.mqtt_doorbell_event_filter, topic)
         if doorbell_id is not None:
             self._ingest_doorbell(doorbell_id, document)
@@ -112,6 +117,7 @@ class MqttBridge:
             [
                 (self._settings.mqtt_node_status_filter, 1),
                 (self._settings.mqtt_gateway_status_topic, 1),
+                (self._settings.mqtt_doorbell_status_filter, 1),
                 (self._settings.mqtt_doorbell_event_filter, 1),
             ]
         )
@@ -137,7 +143,7 @@ class MqttBridge:
         self._store.register_device(node_id, device_type, name, metadata)
 
         reported: dict[str, JsonValue] = {"type": device_type}
-        for key in ("online", "state", "on", "layer", "role", "name", "value"):
+        for key in ("version", "online", "state", "on", "layer", "role", "name", "value"):
             value = _scalar(document.get(key))
             if value is not None:
                 reported[key] = value
@@ -162,7 +168,7 @@ class MqttBridge:
         gateway_id = root if isinstance(root, str) and root else "mesh-gateway"
         self._store.register_device(gateway_id, "gateway", "Mesh 网关", {"source": "mesh"})
         reported: dict[str, JsonValue] = {"type": "gateway"}
-        for key in ("online", "root", "layer", "nodes", "online_nodes", "heap"):
+        for key in ("version", "online", "root", "layer", "nodes", "online_nodes", "heap"):
             value = _scalar(document.get(key))
             if value is not None:
                 reported[key] = value
@@ -178,9 +184,35 @@ class MqttBridge:
             offline_reason=None if reported.get("online") is True else reason,
         )
 
+    def _ingest_doorbell_status(self, doorbell_id: str, document: dict) -> None:
+        device_type = document.get("type")
+        if not isinstance(device_type, str):
+            device_type = "doorbell"
+        name = document.get("name")
+        if not isinstance(name, str):
+            name = "智能门铃"
+        self._store.register_device(doorbell_id, device_type, name, {"source": "doorbell"})
+        reported: dict[str, JsonValue] = {"type": device_type}
+        for key in ("version", "online", "name"):
+            value = _scalar(document.get(key))
+            if value is not None:
+                reported[key] = value
+        message_id = document.get("message_id")
+        if not isinstance(message_id, str):
+            message_id = None
+        reason_value = document.get("offline_reason")
+        reason = reason_value if isinstance(reason_value, str) else "mqtt_disconnect"
+        self._store.update_reported(
+            doorbell_id,
+            reported,
+            message_id=message_id,
+            offline_reason=None if reported.get("online") is True else reason,
+        )
+
     def _ingest_doorbell(self, doorbell_id: str, document: object) -> None:
         event: str | None = None
         message_id: str | None = None
+        version: JsonValue | None = None
         if isinstance(document, str):
             event = document
         elif isinstance(document, dict):
@@ -190,11 +222,15 @@ class MqttBridge:
             message_value = document.get("message_id")
             if isinstance(message_value, str):
                 message_id = message_value
+            version = _scalar(document.get("version"))
         if event is None:
             return
         self._store.register_device(doorbell_id, "doorbell", "智能门铃", {"source": "doorbell"})
+        reported: dict[str, JsonValue] = {"online": True, "type": "doorbell", "last_event": event}
+        if version is not None:
+            reported["version"] = version
         self._store.update_reported(
             doorbell_id,
-            {"online": True, "type": "doorbell", "last_event": event},
+            reported,
             message_id=message_id,
         )

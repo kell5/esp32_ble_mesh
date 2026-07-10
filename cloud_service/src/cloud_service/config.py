@@ -26,6 +26,7 @@ class Settings:
     mqtt_client_id: str
     mqtt_node_status_filter: str
     mqtt_gateway_status_topic: str
+    mqtt_doorbell_status_filter: str
     mqtt_doorbell_event_filter: str
     stale_after_seconds: int
 
@@ -47,6 +48,9 @@ class Settings:
             ),
             mqtt_gateway_status_topic=os.getenv(
                 "CLOUD_MQTT_GATEWAY_STATUS_TOPIC", "office/light/gateway/status"
+            ),
+            mqtt_doorbell_status_filter=os.getenv(
+                "CLOUD_MQTT_DOORBELL_STATUS_FILTER", "doorbell/+/status"
             ),
             mqtt_doorbell_event_filter=os.getenv(
                 "CLOUD_MQTT_DOORBELL_EVENT_FILTER", "doorbell/+/event"

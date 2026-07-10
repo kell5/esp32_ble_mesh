@@ -175,7 +175,8 @@ Flutter App
 - [x] 兼容现有 Mesh 节点、网关和门铃 MQTT 状态主题，不修改既有主题语义。
 - [x] `desired.on`/`desired.command` 转换为现有节点和门铃控制主题。
 - [x] 云端超时离线与明确 `offline_reason`。
-- [ ] 固件 MQTT LWT、消息版本/消息 ID 原生上报和 broker ACL。
+- [x] Mesh 网关和门铃 MQTT LWT、消息版本/消息 ID 原生上报。
+- [ ] 生产 broker ACL、TLS 和凭据轮换。
 - [ ] App 登录、云端设备列表和影子状态接入。
 - [ ] 房间、分组、场景和自动化规则。
 - [ ] 固件 OTA、版本管理、灰度与回滚。
@@ -198,16 +199,16 @@ Flutter App
 
 ## 7. 最近构建结果（2026-07-10）
 
-> Phase A-4 已完成 Flutter、固件和手机布局验证；Phase B 首个云端设备模型切片已通过静态检查与本地 API 测试。
+> Phase A-4 已完成 Flutter、固件和手机布局验证；Phase B 云端设备模型与固件 LWT/消息版本切片已通过静态检查、本地 API 测试和三套固件构建。
 
 | 目标 | 结果 | 产物/备注 |
 |---|---|---|
 | Flutter analyze | 通过，0 issues | `app/` |
 | Flutter debug APK | 通过 | `app/build/app/outputs/flutter-apk/app-debug.apk` |
-| Cloud service | Ruff 通过；7 个 API/影子测试通过 | `cloud_service/` |
-| 门铃 ESP32-S3 | 通过 | `camera_stream/build/`；并行编译曾触发编译器异常，`ninja -j1` 可稳定通过 |
-| Mesh 网关 ESP32-S3 | 通过 | `internal_communication/build-gateway/` |
-| Mesh 节点 ESP32 | 通过 | `internal_communication/build-node/`；app 分区只剩约 1%，需关注 |
+| Cloud service | Ruff 通过；8 个 API/影子测试通过 | `cloud_service/` |
+| 门铃 ESP32-S3 | 通过 | `camera_stream/build/`；app 分区剩余 13% |
+| Mesh 网关 ESP32-S3 | 通过 | `internal_communication/build-gateway/`；app 分区剩余 13% |
+| Mesh 节点 ESP32 | 通过 | `internal_communication/build-node/`；app 分区只剩 1%，需关注 |
 
 关键构建配置：
 
