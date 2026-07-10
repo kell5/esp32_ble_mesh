@@ -126,8 +126,9 @@ office/light/node/<id>/status
 2. `flutter build apk --debug`：通过。
 3. ESP32-S3 网关固件：构建通过。
 4. ESP32 节点固件：构建通过；COM6 WROOM 当前断电，未进行串口或烧录操作。
-5. 待验证：将 APK 安装到已连接手机，检查首页、网关页、设备详情和开关状态切图。
-6. 待验证：用户后续给节点选择不同 Kconfig 类型并烧录，确认 MQTT `type` 和 App 卡片同步变化。
+5. debug APK 已安装到已连接手机：首页设备图片与状态显示正常，设备卡片底部 16px 溢出已修复；未触发实际节点控制。
+6. 新应用启动图标已生成并替换 Android、iOS、macOS、Web 和 Windows 对应资产；Android 安装后显示正常。
+7. 待验证：用户后续给节点选择不同 Kconfig 类型并烧录，确认 MQTT `type` 和 App 卡片同步变化。
 
 ## 8. 待补素材
 

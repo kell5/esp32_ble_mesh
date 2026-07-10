@@ -139,7 +139,7 @@ class _HomePageState extends State<HomePage> {
                   crossAxisCount: 2,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
-                  childAspectRatio: 1.25,
+                  childAspectRatio: 1.05,
                 ),
                 delegate: SliverChildListDelegate(_tiles()),
               ),
