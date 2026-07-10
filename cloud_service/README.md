@@ -141,6 +141,33 @@ curl -X POST http://127.0.0.1:8000/api/v1/users/user-001/automations \
 .\.venv\Scripts\python -m unittest discover -s tests -v
 ```
 
+## 部署到自有服务器（Docker）
+
+在装有 Docker 的服务器上，进入 `cloud_service/`，创建 `.env`（compose 会自动读取）：
+
+```bash
+cat > .env <<'EOF'
+CLOUD_API_TOKEN=用一段强随机串
+CLOUD_MQTT_ENABLED=true
+CLOUD_MQTT_HOST=121.40.131.194
+CLOUD_MQTT_PORT=1883
+CLOUD_MQTT_USERNAME=broker-user
+CLOUD_MQTT_PASSWORD=broker-pass
+# 可选：对外发布端口（默认 8000），以及数据保留天数等
+CLOUD_PUBLISH_PORT=8000
+EOF
+
+docker compose up -d --build
+docker compose logs -f            # 观察 MQTT 连接与设备上报
+curl http://127.0.0.1:8000/health
+```
+
+SQLite 数据保存在命名卷 `cloud_data`（容器内 `/data`），升级重建容器不丢数据。`CLOUD_API_HOST` 在容器内固定为 `0.0.0.0`，由 compose 的端口映射对外暴露。
+
+公网暴露务必加 TLS：用 Nginx/Caddy 反代到容器的 8000 端口，并只放行反代端口。App 登录时"云端地址"填反代后的 `https://你的域名`。
+
+不要把真实 `.env` 提交到仓库（已在忽略之列）；broker 凭据、`CLOUD_API_TOKEN` 都应作为服务器上的密钥管理。
+
 ## 后续边界
 
 当前 `user_id` 是设备归属模型，不等同于完整登录系统。公网部署前还需接入正式用户认证、TLS、broker ACL 和凭据轮换；App 端云列表/影子接入、固件 OTA 与门铃事件索引在后续切片实现。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。
