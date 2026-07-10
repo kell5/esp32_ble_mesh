@@ -19,6 +19,9 @@ dependencies:
   # MJPEG-over-HTTP live view (pure-Dart frame parsing; ESP32-S3 serves :81/stream)
   http: ^1.2.0
 
+  # Local persistence for the cloud login session (base URL / token / user id).
+  shared_preferences: ^2.2.2
+
   # Unified ESP protocomm provisioning over BLE, with SoftAP fallback.
   flutter_blue_plus: 1.36.8
   flutter_local_notifications: 19.5.0

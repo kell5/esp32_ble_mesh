@@ -178,7 +178,7 @@ Flutter App
 - [x] Mesh 网关和门铃 MQTT LWT、消息版本/消息 ID 原生上报。
 - [x] 房间、分组、场景和自动化规则（纯 cloud_service 后端切片：REST CRUD、整组下发、场景激活、`reported` 触发的自动化引擎；18 个测试通过、Ruff 通过）。
 - [ ] 生产 broker ACL、TLS 和凭据轮换。
-- [ ] App 登录、云端设备列表和影子状态接入。
+- [x] App 登录、云端设备列表和影子状态接入（轻量登录：本地持久化 云端地址/Token/user_id；新增「云端」标签展示设备与影子、可下发开关）。
 - [ ] 固件 OTA、版本管理、灰度与回滚。
 - [ ] 门铃事件记录、快照索引和权限控制。
 - [ ] 自动化增强：时间/多条件触发、延时与冷却。
@@ -255,6 +255,11 @@ Flutter App
 - `cloud_service/src/cloud_service/mqtt_bridge.py`（reported 变更回调触发自动化）
 - `cloud_service/tests/test_organization.py`（新增功能测试）
 - `cloud_service/README.md`
+- `app/lib/services/cloud_client.dart`（云端 REST 客户端 + 设备/影子模型）
+- `app/lib/services/cloud_session.dart`（登录会话本地持久化）
+- `app/lib/pages/cloud_login_page.dart`、`cloud_devices_page.dart`、`cloud_device_detail_page.dart`（登录 + 云端设备列表/详情）
+- `app/lib/pages/root_page.dart`（底部标签接入「云端」页）
+- `app/pubspec.yaml`（新增 `shared_preferences`）
 
 ## 9. 已知风险和禁止回归
 

@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart';
 
 import '../services/doorbell_notification_service.dart';
 import '../services/mqtt_service.dart';
+import 'cloud_devices_page.dart';
 import 'home_page.dart';
 import 'incoming_call_page.dart';
 
@@ -97,7 +98,38 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     return Navigator(
       key: _navKey,
       onGenerateRoute: (_) =>
-          CupertinoPageRoute<void>(builder: (_) => HomePage(mqtt: _mqtt)),
+          CupertinoPageRoute<void>(builder: (_) => _MainTabs(mqtt: _mqtt)),
+    );
+  }
+}
+
+/// Bottom tab bar: the local MQTT device home and the cloud device registry.
+class _MainTabs extends StatelessWidget {
+  const _MainTabs({required this.mqtt});
+
+  final MqttService mqtt;
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoTabScaffold(
+      tabBar: CupertinoTabBar(
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(CupertinoIcons.house_fill),
+            label: '我的设备',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(CupertinoIcons.cloud_fill),
+            label: '云端',
+          ),
+        ],
+      ),
+      tabBuilder: (context, index) {
+        return CupertinoTabView(
+          builder: (_) =>
+              index == 0 ? HomePage(mqtt: mqtt) : const CloudDevicesPage(),
+        );
+      },
     );
   }
 }
