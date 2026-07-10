@@ -7,7 +7,7 @@
 - GitHub：`https://github.com/kell5/esp32_ble_mesh`
 - 主分支：`main`
 - 最近更新：`2026-07-10`
-- 当前开发主题：多设备类型、App 图标资产、Mesh 状态 `type` 协议
+- 当前开发主题：Phase B 云端房间/分组/场景/自动化后端切片
 
 ## 1. 产品目标
 
@@ -176,11 +176,12 @@ Flutter App
 - [x] `desired.on`/`desired.command` 转换为现有节点和门铃控制主题。
 - [x] 云端超时离线与明确 `offline_reason`。
 - [x] Mesh 网关和门铃 MQTT LWT、消息版本/消息 ID 原生上报。
+- [x] 房间、分组、场景和自动化规则（纯 cloud_service 后端切片：REST CRUD、整组下发、场景激活、`reported` 触发的自动化引擎；18 个测试通过、Ruff 通过）。
 - [ ] 生产 broker ACL、TLS 和凭据轮换。
 - [ ] App 登录、云端设备列表和影子状态接入。
-- [ ] 房间、分组、场景和自动化规则。
 - [ ] 固件 OTA、版本管理、灰度与回滚。
 - [ ] 门铃事件记录、快照索引和权限控制。
+- [ ] 自动化增强：时间/多条件触发、延时与冷却。
 
 运行、API、环境变量和兼容主题见 [`cloud_service/README.md`](../cloud_service/README.md)。
 
@@ -205,7 +206,7 @@ Flutter App
 |---|---|---|
 | Flutter analyze | 通过，0 issues | `app/` |
 | Flutter debug APK | 通过 | `app/build/app/outputs/flutter-apk/app-debug.apk` |
-| Cloud service | Ruff 通过；8 个 API/影子测试通过 | `cloud_service/` |
+| Cloud service | Ruff 通过；18 个测试通过（含房间/分组/场景/自动化） | `cloud_service/` |
 | 门铃 ESP32-S3 | 通过 | `camera_stream/build/`；app 分区剩余 13% |
 | Mesh 网关 ESP32-S3 | 通过 | `internal_communication/build-gateway/`；app 分区剩余 13% |
 | Mesh 节点 ESP32 | 通过 | `internal_communication/build-node/`；app 分区只剩 1%，需关注 |
@@ -247,6 +248,13 @@ Flutter App
 - `app/lib/services/mqtt_service.dart`
 - `internal_communication/main/include/mesh_light.h`
 - `docs/DEVICE_ASSET_STATUS.md`
+- `cloud_service/src/cloud_service/models.py`（房间/分组/场景/自动化模型）
+- `cloud_service/src/cloud_service/storage.py`（对应 SQLite 表与方法）
+- `cloud_service/src/cloud_service/automation.py`（分组下发/场景激活/自动化引擎）
+- `cloud_service/src/cloud_service/main.py`（新增 REST 端点、引擎接线）
+- `cloud_service/src/cloud_service/mqtt_bridge.py`（reported 变更回调触发自动化）
+- `cloud_service/tests/test_organization.py`（新增功能测试）
+- `cloud_service/README.md`
 
 ## 9. 已知风险和禁止回归
 

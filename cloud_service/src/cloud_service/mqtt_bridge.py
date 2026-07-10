@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from threading import Event
+from typing import Callable
 
 from paho.mqtt import client as mqtt
 from pydantic import JsonValue
@@ -27,15 +28,24 @@ def _scalar(value: object) -> JsonValue | None:
 
 
 class MqttBridge:
-    def __init__(self, store: DeviceStore, settings: Settings) -> None:
+    def __init__(
+        self,
+        store: DeviceStore,
+        settings: Settings,
+        on_reported: Callable[[str], None] | None = None,
+    ) -> None:
         self._store = store
         self._settings = settings
+        self._on_reported = on_reported
         self._client: mqtt.Client | None = None
         self._connected = Event()
 
     @property
     def connected(self) -> bool:
         return self._connected.is_set()
+
+    def set_reported_handler(self, handler: Callable[[str], None]) -> None:
+        self._on_reported = handler
 
     def start(self) -> None:
         if self._client is not None:
@@ -82,6 +92,22 @@ class MqttBridge:
 
         result = client.publish(topic, payload, qos=1, retain=False)
         return result.rc == mqtt.MQTT_ERR_SUCCESS
+
+    def _apply_reported(
+        self,
+        device_id: str,
+        reported: dict[str, JsonValue],
+        message_id: str | None,
+        offline_reason: str | None,
+    ) -> None:
+        _shadow, changed = self._store.update_reported(
+            device_id,
+            reported,
+            message_id=message_id,
+            offline_reason=offline_reason,
+        )
+        if changed and self._on_reported is not None:
+            self._on_reported(device_id)
 
     def ingest(self, topic: str, payload: bytes) -> None:
         text = payload.decode("utf-8", errors="replace")
@@ -156,7 +182,7 @@ class MqttBridge:
         online = reported.get("online")
         reason_value = document.get("offline_reason")
         reason = reason_value if isinstance(reason_value, str) else "gateway_reported_offline"
-        self._store.update_reported(
+        self._apply_reported(
             node_id,
             reported,
             message_id=message_id,
@@ -177,7 +203,7 @@ class MqttBridge:
             message_id = None
         reason_value = document.get("offline_reason")
         reason = reason_value if isinstance(reason_value, str) else "mqtt_disconnect"
-        self._store.update_reported(
+        self._apply_reported(
             gateway_id,
             reported,
             message_id=message_id,
@@ -202,7 +228,7 @@ class MqttBridge:
             message_id = None
         reason_value = document.get("offline_reason")
         reason = reason_value if isinstance(reason_value, str) else "mqtt_disconnect"
-        self._store.update_reported(
+        self._apply_reported(
             doorbell_id,
             reported,
             message_id=message_id,
@@ -229,8 +255,9 @@ class MqttBridge:
         reported: dict[str, JsonValue] = {"online": True, "type": "doorbell", "last_event": event}
         if version is not None:
             reported["version"] = version
-        self._store.update_reported(
+        self._apply_reported(
             doorbell_id,
             reported,
             message_id=message_id,
+            offline_reason=None,
         )
