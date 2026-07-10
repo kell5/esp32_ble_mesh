@@ -135,17 +135,16 @@ Flutter App
 - [x] Flutter analyze 和 debug APK 构建通过。
 - [ ] 可选硬件验证：实际清除门铃/网关 WiFi 后，用 App 完成一次 BLE 配网。
 
-### Phase A-3：门铃系统通知 — 第一阶段已实现
+### Phase A-3：门铃系统通知 — 按当前需求已完成
 
 - [x] App 在前台收到 `ringing` 时显示来电页面。
 - [x] App 处于后台但进程仍存活时显示 Android/iOS 本地系统通知。
 - [x] 点击通知进入门铃来电/实时画面页面。
 - [x] Android 13+ 通知权限和高优先级门铃通知频道。
 - [x] 通知插件所需 core library desugaring 配置。
-- [ ] 真正“App 被系统彻底杀死后仍能通知”：需要服务端推送。
-- [ ] 推送提供方待选：国际 Android/iOS 用 FCM + APNs；华为无 GMS 设备建议 HMS Push Kit；也可做统一 Push Provider 接口同时支持两者。
+- [x] 用户确认 App 被系统彻底杀死后不需要通知，不接入 FCM/HMS 云推送。
 
-> 当前本地通知依赖 App 的 MQTT 进程仍在运行。不要把它描述成已实现的离线云推送。
+> 当前通知范围：App 前台显示来电页；App 退到后台但 MQTT 进程仍存活时显示系统通知。
 
 ### Phase B：云端设备模型 — 未开始
 
@@ -157,7 +156,6 @@ Flutter App
 - [ ] 房间、分组、场景和自动化规则。
 - [ ] 固件 OTA、版本管理、灰度与回滚。
 - [ ] 门铃事件记录、快照索引和权限控制。
-- [ ] 服务端推送（FCM/APNs/HMS）和设备 token 管理。
 
 ### Phase C：Matter over WiFi 简历演示 — 未开始
 
@@ -219,17 +217,16 @@ Flutter App
 4. ESP32 节点固件 app 分区余量约 1%，新增组件前先检查尺寸。
 5. COM6 关闭 brownout 只是供电不足的兜底，存在掉电/闪存风险，最终应改善供电。
 6. BLE 配网只支持 2.4 GHz WiFi；错误提示不要暗示 ESP32 可连接 5 GHz。
-7. 本地通知不是云推送；进程被杀后的通知必须由服务器和系统推送通道完成。
+7. 通知仅保证 App 前台和后台进程存活场景；进程被杀后不通知是当前确认需求。
 8. 不提交 `build/`、生成的 `sdkconfig.*.generated`、日志、截图和临时脚本。
 
 ## 10. 下一步优先级
 
-1. 提交并推送 Phase A-2/A-3 与文档。
+1. 将当前功能分支合并到 `main`。
 2. 可选：用测试手机验证 App 退到后台后按 COM8 IO0，系统通知出现且点击能进入门铃页。
 3. 可选：擦除门铃或网关 WiFi，完成一次真实 BLE 配网闭环。
-4. 设计 Phase B 的设备注册、影子、LWT、OTA 和 Push Provider 接口。
-5. 如需要“App 被杀仍提醒”，优先确定测试机是否具备 GMS；MEP AN00 若无 GMS，选择 HMS Push Kit 或 FCM/HMS 双实现。
-6. 准备 Matter over WiFi 灯/插座演示节点。
+4. 设计 Phase B 的设备注册、影子、LWT、OTA、房间和自动化接口。
+5. 准备 Matter over WiFi 灯/插座演示节点。
 
 ## 11. 新会话恢复步骤
 
@@ -237,7 +234,7 @@ Flutter App
 
 1. 阅读本文件、`docs/APP_DEVICE_ICON_PROMPTS.md` 和 `docs/SINGLE_DEVICE_ICON_PROMPTS.md`。
 2. 执行 `git status --short`、`git branch --show-current`、`git log -1 --oneline`。
-3. 确认用户要继续的是 BLE 硬件验证、系统推送、Phase B、Matter，还是 UI 图标资源。
+3. 确认用户要继续的是 BLE 硬件验证、Phase B、Matter，还是 UI 图标资源。
 4. 修改前阅读对应模块 README 和当前实现。
 5. 完成后更新本文件的阶段状态、构建结果、已知问题和下一步。
 
