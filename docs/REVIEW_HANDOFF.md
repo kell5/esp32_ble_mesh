@@ -14,7 +14,15 @@
     2. `device_id` 实际取 `CONFIG_EXAMPLE_DOORBELL_ID`（Kconfig），量产需每板唯一；`app_wifi.h` 注释写“MAC 派生”与实现不符，需统一。
     3. ack 发到 `farmely/doorbell/<id>/up/event`（channel=event）；云端 `_ingest_farmely` 对 event 通道优先按事件处理，会把 ack 记进事件表。建议 ack 改走 `up/status` 或新增 `up/ack` 通道，或云端在按 channel 之前先看 `type`。
 
-- **T-APP-UX（`app/`）** — `flutter analyze` 0 问题。**尚未完成人工审阅**：需确认新 `home_shell.dart`、删除 `home_page.dart`、`root_page.dart` 改动**没有破坏已修好的根级 PopScope 返回键逻辑**（commit `851e288` 引入，禁止回退）。确认无回归后再提交。
+- **T-APP-UX（`app/`）** — WIP，未完成，本次先提交进度供接手。
+  - **已发现并修复的回归（关键）**：账号优先重构第一版在 `_MainShell` 里多套了一层 `Navigator`（双层嵌套导航器），导致顶层「我的设备」列表按系统返回键**直接回桌面**，而不是弹「退出应用」确认框（真机 MEP-AN00 activity dump 实测：首次返回后 launcher 变 topResumedActivity）。详情页返回列表正常，仅顶层退出确认被破坏。这违反 851e288 的返回键契约。
+    - **修复**：`root_page.dart` 收敛为**单个应用内导航器** `_navKey`，初始路由 `AppShell`，设备详情页与来电覆盖页都 push 到同一 `_navKey`。`_handleBack()`：`_navKey.canPop()` 为真→pop（详情/覆盖页）；否则弹 `_confirmExit()`。删除了不再需要的 `CupertinoTabController _tab` 与 `_tabNavKeys`、`_MainShell`。保留 851e288「首次返回不退出」的契约，未回退。
+    - **待验证**：需在真机重跑：顶层返回→退出确认框（取消保留）、详情返回→回列表、来电覆盖返回→关覆盖。（本人 KVM 不可用，用真机 adb 验，进行中。）
+  - **新增功能（本次实现，`cloud_devices_page.dart`）**：
+    1. **添加设备自动发现 + 保留手动输入**：新增 `_AddDevicePage`，「自动发现（局域网）」列出 `MqttService.devicesSnapshot` 中未认领的 mesh 节点，一键 `claimDevice`；「手动添加」保留设备 ID 输入框；「全新设备」提供**一个**「蓝牙配网」按钮进入既有 `ProvisioningPage`。复用现有接口，无新增依赖。
+    2. 空态引导文案同步更新为「自动发现 / 手动输入 / 蓝牙配网」。
+  - **阻塞项：App 内手动删除设备**（用户要求）——**无法仅在 `app/` 内实现**。查 `cloud_service/src/cloud_service/main.py`：设备平面只有 `GET /me/devices`、`POST /me/devices/{id}/claim`、`register/get/shadow`，**没有取消认领/删除设备端点**（`@app.delete` 仅 rooms/groups/scenes/automations）。真删除（含用户日后要回 door-001）必须先由后端提供 `DELETE /api/v1/me/devices/{id}`（或 unclaim）。待总指挥决策：①在 `cloud_service` 加此端点（超出「只改 app/」边界，需授权）；②App 仅做本地隐藏（不解除云端归属，无法要回设备，不推荐）。已在 App 侧预留位置，端点确定后接。
+  - 自检：`flutter analyze`（见提交说明）；返回键真机验证进行中。
 
 ## 待修（阻塞，必须修复后重新构建再提交）
 **任务号：T-FW-CONTRACT-FIX（`internal_communication/main/mesh_main.c`，网关/根节点）**
