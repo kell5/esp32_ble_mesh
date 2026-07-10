@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 
 import '../services/mqtt_service.dart';
+import '../widgets/device_icon.dart';
 import '../widgets/smart_cards.dart';
 import 'light_detail_page.dart';
 
@@ -19,10 +20,10 @@ class GatewayDetailPage extends StatefulWidget {
 }
 
 class _GatewayDetailPageState extends State<GatewayDetailPage> {
-  List<LightDevice> _devices = const [];
+  List<MeshDevice> _devices = const [];
   GatewayStatus? _gateway;
 
-  StreamSubscription<List<LightDevice>>? _devSub;
+  StreamSubscription<List<MeshDevice>>? _devSub;
   StreamSubscription<GatewayStatus?>? _gwSub;
 
   @override
@@ -64,15 +65,19 @@ class _GatewayDetailPageState extends State<GatewayDetailPage> {
             const SizedBox(height: 16),
             const Padding(
               padding: EdgeInsets.only(left: 4, bottom: 8),
-              child: Text('网络节点',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              child: Text(
+                '网络节点',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
             ),
             ..._devices.map(_nodeRow),
             if (_devices.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(16),
-                child: Text('暂无节点',
-                    style: TextStyle(color: CupertinoColors.systemGrey)),
+                child: Text(
+                  '暂无节点',
+                  style: TextStyle(color: CupertinoColors.systemGrey),
+                ),
               ),
           ],
         ),
@@ -93,23 +98,28 @@ class _GatewayDetailPageState extends State<GatewayDetailPage> {
         children: [
           Row(
             children: [
-              Icon(
-                gw != null && gw.online
-                    ? CupertinoIcons.antenna_radiowaves_left_right
-                    : CupertinoIcons.wifi_slash,
-                color: gw != null && gw.online
-                    ? CupertinoColors.activeGreen
-                    : CupertinoColors.systemGrey,
-                size: 28,
+              DeviceIcon(
+                type: DeviceType.gateway,
+                online: gw != null && gw.online,
+                on: gw != null && gw.online,
+                size: 54,
               ),
               const SizedBox(width: 12),
-              Text(gw != null && gw.online ? '网关在线' : '网关离线',
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600)),
+              Text(
+                gw != null && gw.online ? '网关在线' : '网关离线',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               const Spacer(),
-              Text('$_onlineCount 在线/${_devices.length}',
-                  style: const TextStyle(
-                      color: CupertinoColors.systemGrey, fontSize: 12)),
+              Text(
+                '$_onlineCount 在线/${_devices.length}',
+                style: const TextStyle(
+                  color: CupertinoColors.systemGrey,
+                  fontSize: 12,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -119,25 +129,31 @@ class _GatewayDetailPageState extends State<GatewayDetailPage> {
             _kv('节点数', '${gw.nodes}'),
             _kv('更新于', agoLabel(gw.updatedAt)),
           ] else
-            const Text('等待网关上报…',
-                style: TextStyle(color: CupertinoColors.systemGrey)),
+            const Text(
+              '等待网关上报…',
+              style: TextStyle(color: CupertinoColors.systemGrey),
+            ),
         ],
       ),
     );
   }
 
   Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          children: [
-            Text(k,
-                style: const TextStyle(
-                    color: CupertinoColors.systemGrey, fontSize: 13)),
-            const Spacer(),
-            Text(v, style: const TextStyle(fontSize: 13)),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      children: [
+        Text(
+          k,
+          style: const TextStyle(
+            color: CupertinoColors.systemGrey,
+            fontSize: 13,
+          ),
         ),
-      );
+        const Spacer(),
+        Text(v, style: const TextStyle(fontSize: 13)),
+      ],
+    ),
+  );
 
   Widget _groupCard() {
     return Container(
@@ -148,27 +164,33 @@ class _GatewayDetailPageState extends State<GatewayDetailPage> {
       ),
       child: Row(
         children: [
-          const Icon(CupertinoIcons.square_grid_2x2,
-              color: CupertinoColors.activeBlue),
+          const Icon(
+            CupertinoIcons.square_grid_2x2,
+            color: CupertinoColors.activeBlue,
+          ),
           const SizedBox(width: 10),
-          const Text('全部设备',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          const Text(
+            '全部设备',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
           const Spacer(),
           PillButton(
-              label: '全开',
-              filled: true,
-              onPressed: () => widget.mqtt.setAllLights(true)),
+            label: '全开',
+            filled: true,
+            onPressed: () => widget.mqtt.setAllLights(true),
+          ),
           const SizedBox(width: 8),
           PillButton(
-              label: '全关',
-              filled: false,
-              onPressed: () => widget.mqtt.setAllLights(false)),
+            label: '全关',
+            filled: false,
+            onPressed: () => widget.mqtt.setAllLights(false),
+          ),
         ],
       ),
     );
   }
 
-  Widget _nodeRow(LightDevice d) {
+  Widget _nodeRow(MeshDevice d) {
     return GestureDetector(
       onTap: () => Navigator.of(context).push(
         CupertinoPageRoute<void>(
@@ -185,32 +207,38 @@ class _GatewayDetailPageState extends State<GatewayDetailPage> {
         ),
         child: Row(
           children: [
-            Icon(
-              d.isRoot
-                  ? CupertinoIcons.antenna_radiowaves_left_right
-                  : CupertinoIcons.lightbulb,
-              color: d.online
-                  ? CupertinoColors.activeBlue
-                  : CupertinoColors.systemGrey3,
+            DeviceIcon(
+              type: d.isRoot ? DeviceType.gateway : d.type,
+              online: d.online,
+              on: d.on,
+              size: 44,
+              borderRadius: 11,
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(d.displayName,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(
+                    d.displayName,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   const SizedBox(height: 2),
                   Text(
-                    '${d.isRoot ? '网关' : '节点'} · L${d.layer} · ${d.online ? (d.on ? '已开启' : '已关闭') : '离线'}',
+                    '${d.isRoot ? '网关' : d.type.label} · L${d.layer} · ${d.type.stateLabel(online: d.online, on: d.on)}',
                     style: const TextStyle(
-                        color: CupertinoColors.systemGrey, fontSize: 12),
+                      color: CupertinoColors.systemGrey,
+                      fontSize: 12,
+                    ),
                   ),
                 ],
               ),
             ),
-            const Icon(CupertinoIcons.chevron_forward,
-                size: 16, color: CupertinoColors.systemGrey3),
+            const Icon(
+              CupertinoIcons.chevron_forward,
+              size: 16,
+              color: CupertinoColors.systemGrey3,
+            ),
           ],
         ),
       ),

@@ -9,51 +9,117 @@ import '../config.dart';
 /// Doorbell events published by the ESP32-S3 to `doorbell/<id>/event`.
 enum DoorbellEvent { ringing, streamStart, streamStop, unknown }
 
-/// Broad category of a mesh device, used to pick the card/control to render.
-/// Only [light] is produced today; the others are placeholders so new device
-/// classes can be added by having the firmware report `"type"` without any
-/// App refactor.
+/// Product type reported by firmware and used for device-specific UI.
 enum DeviceType {
-  light, // on/off luminaire (current)
-  switch_, // generic on/off actuator (relay / socket)
-  sensor, // read-only measurement (temp / humidity / door contact)
+  doorbell,
+  camera,
+  gateway,
+  lightBulb,
+  ceilingLight,
+  lightStrip,
+  wallSwitch,
+  socket,
+  relay,
+  curtainMotor,
+  valve,
+  doorLock,
+  sensor,
   unknown;
 
-  static DeviceType fromString(String? s) {
-    switch (s) {
+  static DeviceType fromString(String? value) {
+    switch (value) {
+      case 'doorbell':
+        return DeviceType.doorbell;
+      case 'camera':
+        return DeviceType.camera;
+      case 'gateway':
+        return DeviceType.gateway;
       case 'light':
-        return DeviceType.light;
+      case 'light_bulb':
+        return DeviceType.lightBulb;
+      case 'ceiling_light':
+        return DeviceType.ceilingLight;
+      case 'light_strip':
+        return DeviceType.lightStrip;
       case 'switch':
-      case 'relay':
+      case 'wall_switch':
+        return DeviceType.wallSwitch;
       case 'socket':
-        return DeviceType.switch_;
+        return DeviceType.socket;
+      case 'relay':
+        return DeviceType.relay;
+      case 'curtain_motor':
+        return DeviceType.curtainMotor;
+      case 'valve':
+        return DeviceType.valve;
+      case 'door_lock':
+        return DeviceType.doorLock;
       case 'sensor':
         return DeviceType.sensor;
       case null:
-        return DeviceType.light; // default: legacy nodes are lights
+        return DeviceType.lightBulb;
       default:
         return DeviceType.unknown;
     }
   }
 
-  /// True for devices the user can toggle on/off.
-  bool get isControllable =>
-      this == DeviceType.light || this == DeviceType.switch_;
+  bool get isControllable => switch (this) {
+    DeviceType.lightBulb ||
+    DeviceType.ceilingLight ||
+    DeviceType.lightStrip ||
+    DeviceType.wallSwitch ||
+    DeviceType.socket ||
+    DeviceType.relay ||
+    DeviceType.curtainMotor ||
+    DeviceType.valve ||
+    DeviceType.doorLock => true,
+    _ => false,
+  };
+
+  bool get isLight =>
+      this == DeviceType.lightBulb ||
+      this == DeviceType.ceilingLight ||
+      this == DeviceType.lightStrip;
+
+  String get label => switch (this) {
+    DeviceType.doorbell => '智能门铃',
+    DeviceType.camera => '监控摄像头',
+    DeviceType.gateway => 'Mesh 网关',
+    DeviceType.lightBulb => '智能灯泡',
+    DeviceType.ceilingLight => '吸顶灯',
+    DeviceType.lightStrip => '智能灯带',
+    DeviceType.wallSwitch => '墙壁开关',
+    DeviceType.socket => '智能插座',
+    DeviceType.relay => '继电器',
+    DeviceType.curtainMotor => '窗帘电机',
+    DeviceType.valve => '智能阀门',
+    DeviceType.doorLock => '智能门锁',
+    DeviceType.sensor => '检测设备',
+    DeviceType.unknown => '智能设备',
+  };
+
+  String stateLabel({required bool online, required bool on}) {
+    if (!online) return '离线';
+    return switch (this) {
+      DeviceType.curtainMotor || DeviceType.valve => on ? '已打开' : '已关闭',
+      DeviceType.doorLock => on ? '已上锁' : '已解锁',
+      DeviceType.gateway || DeviceType.sensor => '在线',
+      _ => on ? '已开启' : '已关闭',
+    };
+  }
 }
 
-/// A single BLE-Mesh device as reported by the gateway (root) on
-/// `office/light/node/<id>/status`. Today every node is a [DeviceType.light];
-/// the model carries [type]/[value]/[name] so future actuators and sensors
-/// display without changing this class.
-class LightDevice {
-  const LightDevice({
+/// A mesh device reported by the gateway on
+/// `office/light/node/<id>/status`.
+class MeshDevice {
+  const MeshDevice({
     required this.id,
     required this.on,
     required this.online,
     required this.layer,
     required this.role,
     required this.updatedAt,
-    this.type = DeviceType.light,
+    this.type = DeviceType.lightBulb,
     this.name,
     this.value,
   });
@@ -74,17 +140,18 @@ class LightDevice {
 
   bool get isRoot => role == 'root';
 
-  /// Short display name: reported name, else the hex suffix of the id.
+  /// Short display name: reported name, else product type plus MAC suffix.
   String get displayName {
     if (name != null && name!.isNotEmpty) return name!;
     final dash = id.lastIndexOf('-');
-    return dash >= 0 ? '灯 ${id.substring(dash + 1)}' : id;
+    final suffix = dash >= 0 ? id.substring(dash + 1) : id;
+    return '${type.label} $suffix';
   }
 
-  static LightDevice? fromJson(Map<String, dynamic> j) {
+  static MeshDevice? fromJson(Map<String, dynamic> j) {
     final id = j['id'];
     if (id is! String || id.isEmpty) return null;
-    return LightDevice(
+    return MeshDevice(
       id: id,
       on: (j['state'] ?? 'off') == 'on' || j['on'] == true,
       online: j['online'] == true,
@@ -122,8 +189,9 @@ class GatewayStatus {
       root: (j['root'] as String?) ?? '—',
       layer: (j['layer'] is num) ? (j['layer'] as num).toInt() : 0,
       nodes: (j['nodes'] is num) ? (j['nodes'] as num).toInt() : 0,
-      onlineNodes:
-          (j['online_nodes'] is num) ? (j['online_nodes'] as num).toInt() : 0,
+      onlineNodes: (j['online_nodes'] is num)
+          ? (j['online_nodes'] as num).toInt()
+          : 0,
       updatedAt: DateTime.now(),
     );
   }
@@ -140,12 +208,12 @@ class MqttService {
       StreamController<DoorbellEvent>.broadcast();
   final StreamController<String> _lightStatus =
       StreamController<String>.broadcast();
-  final StreamController<List<LightDevice>> _devices =
-      StreamController<List<LightDevice>>.broadcast();
+  final StreamController<List<MeshDevice>> _devices =
+      StreamController<List<MeshDevice>>.broadcast();
   final StreamController<GatewayStatus?> _gateway =
       StreamController<GatewayStatus?>.broadcast();
 
-  final Map<String, LightDevice> _deviceMap = {};
+  final Map<String, MeshDevice> _deviceMap = {};
   GatewayStatus? _lastGateway;
 
   Stream<bool> get connection => _connection.stream;
@@ -153,27 +221,32 @@ class MqttService {
   Stream<String> get lightStatus => _lightStatus.stream;
 
   /// Emits the full device list whenever any node's status changes.
-  Stream<List<LightDevice>> get devices => _devices.stream;
+  Stream<List<MeshDevice>> get devices => _devices.stream;
   Stream<GatewayStatus?> get gateway => _gateway.stream;
 
-  List<LightDevice> get devicesSnapshot => _sortedDevices();
+  List<MeshDevice> get devicesSnapshot => _sortedDevices();
   GatewayStatus? get gatewaySnapshot => _lastGateway;
 
   bool get isConnected =>
       _client?.connectionStatus?.state == MqttConnectionState.connected;
 
   Future<void> connect() async {
-    final clientId = 'flutter_doorbell_${DateTime.now().millisecondsSinceEpoch}';
-    final client =
-        MqttServerClient.withPort(AppConfig.mqttHost, clientId, AppConfig.mqttPort);
+    final clientId =
+        'flutter_doorbell_${DateTime.now().millisecondsSinceEpoch}';
+    final client = MqttServerClient.withPort(
+      AppConfig.mqttHost,
+      clientId,
+      AppConfig.mqttPort,
+    );
     client.logging(on: false);
     client.keepAlivePeriod = 30;
     client.autoReconnect = true;
     client.onConnected = () => _connection.add(true);
     client.onDisconnected = () => _connection.add(false);
     client.onSubscribed = (_) {};
-    client.connectionMessage =
-        MqttConnectMessage().withClientIdentifier(clientId).startClean();
+    client.connectionMessage = MqttConnectMessage()
+        .withClientIdentifier(clientId)
+        .startClean();
 
     _client = client;
     try {
@@ -193,8 +266,9 @@ class MqttService {
   void _onMessage(List<MqttReceivedMessage<MqttMessage>> batch) {
     for (final received in batch) {
       final message = received.payload as MqttPublishMessage;
-      final payload =
-          MqttPublishPayload.bytesToStringAsString(message.payload.message);
+      final payload = MqttPublishPayload.bytesToStringAsString(
+        message.payload.message,
+      );
       final topic = received.topic;
 
       if (topic == AppConfig.doorbellEventTopic) {
@@ -221,13 +295,13 @@ class MqttService {
   void _handleNodeStatus(String payload) {
     final map = _tryDecode(payload);
     if (map == null) return;
-    final device = LightDevice.fromJson(map);
+    final device = MeshDevice.fromJson(map);
     if (device == null) return;
     _deviceMap[device.id] = device;
     _devices.add(_sortedDevices());
   }
 
-  List<LightDevice> _sortedDevices() {
+  List<MeshDevice> _sortedDevices() {
     final list = _deviceMap.values.toList();
     // Root first, then online before offline, then by id.
     list.sort((a, b) {

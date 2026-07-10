@@ -7,7 +7,7 @@
 - GitHub：`https://github.com/kell5/esp32_ble_mesh`
 - 主分支：`main`
 - 最近更新：`2026-07-10`
-- 当前开发主题：统一 BLE 配网、统一设备 App、门铃后台通知
+- 当前开发主题：多设备类型、App 图标资产、Mesh 状态 `type` 协议
 
 ## 1. 产品目标
 
@@ -146,6 +146,26 @@ Flutter App
 
 > 当前通知范围：App 前台显示来电页；App 退到后台但 MQTT 进程仍存活时显示系统通知。
 
+### Phase A-4：多设备类型、图标资产与状态协议 — 代码与构建验证完成，等待手机验证
+
+- [x] 实际读取 `app/image/`：找到 26 张单图，不是清单中的 36 张。
+- [x] 识别 9 类设备：网关、灯泡、吸顶灯、灯带、墙壁开关、插座、窗帘电机、阀门、门锁。
+- [x] 确认缺失：门铃、摄像头、继电器三态，以及阀门离线态。
+- [x] 将可用素材中心裁剪并转换为 26 个 `512×512` WebP 测试 asset。
+- [x] App `DeviceType` 扩展到具体产品类型，并兼容旧值 `light/switch`。
+- [x] 首页、网关详情和设备详情接入真实设备图片；缺图时使用系统图标。
+- [x] 首页过滤 root 节点，网关只在网关模块显示，避免重复显示成灯。
+- [x] 设备详情按灯具、开关/插座、窗帘、阀门、门锁显示不同扩展方向。
+- [x] Mesh 固件增加 Kconfig 节点类型选择和 MQTT `type` 字段。
+- [x] 状态包采用末尾追加字段，网关仍兼容没有 `type` 的旧节点。
+- [x] Flutter analyze 通过（0 issues），debug APK 构建通过。
+- [ ] 安装到已连接手机，检查图片切换、页面布局和节点控制。
+- [x] ESP32-S3 网关构建通过。
+- [x] ESP32 节点构建通过；COM6 WROOM 当前断电，未做烧录或串口验证。
+- [ ] 用户实机选择不同设备类型并烧录验证。
+
+详细文件映射、协议示例和测试步骤见 [DEVICE_ASSET_STATUS.md](DEVICE_ASSET_STATUS.md)。
+
 ### Phase B：云端设备模型 — 未开始
 
 计划内容：
@@ -171,6 +191,8 @@ Flutter App
 - 当前不写无法在现有硬件验证的 Thread 产品代码。
 
 ## 7. 最近构建结果（2026-07-10）
+
+> Phase A-4 图标与设备类型改动已于 2026-07-10 重新完成 Flutter、网关和节点构建验证。
 
 | 目标 | 结果 | 产物/备注 |
 |---|---|---|
@@ -208,6 +230,15 @@ Flutter App
 - `internal_communication/main/Kconfig.projbuild`
 - `internal_communication/main/CMakeLists.txt`
 - `internal_communication/sdkconfig.gateway.defaults`
+- `app/assets/device_icons/`
+- `app/lib/widgets/device_icon.dart`
+- `app/lib/widgets/smart_cards.dart`
+- `app/lib/pages/home_page.dart`
+- `app/lib/pages/gateway_detail_page.dart`
+- `app/lib/pages/light_detail_page.dart`
+- `app/lib/services/mqtt_service.dart`
+- `internal_communication/main/include/mesh_light.h`
+- `docs/DEVICE_ASSET_STATUS.md`
 
 ## 9. 已知风险和禁止回归
 
@@ -219,28 +250,35 @@ Flutter App
 6. BLE 配网只支持 2.4 GHz WiFi；错误提示不要暗示 ESP32 可连接 5 GHz。
 7. 通知仅保证 App 前台和后台进程存活场景；进程被杀后不通知是当前确认需求。
 8. 不提交 `build/`、生成的 `sdkconfig.*.generated`、日志、截图和临时脚本。
+9. 当前 26 张图片是 RGB 棋盘格背景测试素材；正式发布前应替换为无平台标识、透明背景、状态一致的素材。
+10. 窗帘、阀门、门锁等目前只复用 on/off 协议和板载 LED 指示，尚未实现真实电机、限位、继电器与安全保护。
+11. COM6 WROOM 当前已断电；本轮不连接、不烧录，仅做节点固件构建验证。
 
 ## 10. 下一步优先级
 
-1. 将当前功能分支合并到 `main`。
-2. 可选：用测试手机验证 App 退到后台后按 COM8 IO0，系统通知出现且点击能进入门铃页。
-3. 可选：擦除门铃或网关 WiFi，完成一次真实 BLE 配网闭环。
-4. 设计 Phase B 的设备注册、影子、LWT、OTA、房间和自动化接口。
-5. 准备 Matter over WiFi 灯/插座演示节点。
+1. 完成 Phase A-4 的 Flutter analyze、debug APK、ESP32-S3 网关和 ESP32 节点构建。
+2. 将新版 APK 安装到已连接手机，检查设备图标、离线态、类型文案和详情页。
+3. WROOM 上电后由用户选择节点类型并烧录，验证 MQTT `type` 和 App 卡片同步变化。
+4. 将当前功能分支合并到 `main`。
+5. 可选：用测试手机验证 App 退到后台后按 COM8 IO0，系统通知出现且点击能进入门铃页。
+6. 可选：擦除门铃或网关 WiFi，完成一次真实 BLE 配网闭环。
+7. 设计 Phase B 的设备注册、影子、LWT、OTA、房间和自动化接口。
+8. 准备 Matter over WiFi 灯/插座演示节点。
 
 ## 11. 新会话恢复步骤
 
 新会话不要直接改代码，按顺序执行：
 
-1. 阅读本文件、`docs/APP_DEVICE_ICON_PROMPTS.md` 和 `docs/SINGLE_DEVICE_ICON_PROMPTS.md`。
+1. 阅读本文件、`docs/DEVICE_ASSET_STATUS.md`、`docs/APP_DEVICE_ICON_PROMPTS.md` 和 `docs/SINGLE_DEVICE_ICON_PROMPTS.md`。
 2. 执行 `git status --short`、`git branch --show-current`、`git log -1 --oneline`。
-3. 确认用户要继续的是 BLE 硬件验证、Phase B、Matter，还是 UI 图标资源。
+3. 先检查 Phase A-4 的构建/手机安装是否完成，再确认继续 BLE 硬件验证、Phase B 或 Matter。
 4. 修改前阅读对应模块 README 和当前实现。
 5. 完成后更新本文件的阶段状态、构建结果、已知问题和下一步。
 
 ## 12. 文档索引
 
 - `docs/DEVELOPMENT_PROGRESS.md`：总进度和会话交接（本文件）。
+- `docs/DEVICE_ASSET_STATUS.md`：已识别图片、缺失素材、App 映射、固件 `type` 协议和测试步骤。
 - `docs/APP_DEVICE_ICON_PROMPTS.md`：设备图标视觉规范与类型描述。
 - `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成的完整可复制提示词。
 - `camera_stream/README.md`：门铃摄像头与 MJPEG 链路。

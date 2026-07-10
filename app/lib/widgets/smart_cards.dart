@@ -11,8 +11,7 @@ import 'package:flutter/cupertino.dart';
 class SmartCard extends StatelessWidget {
   const SmartCard({
     super.key,
-    required this.icon,
-    required this.iconColor,
+    required this.leading,
     required this.title,
     required this.subtitle,
     this.online = true,
@@ -20,8 +19,7 @@ class SmartCard extends StatelessWidget {
     this.onTap,
   });
 
-  final IconData icon;
-  final Color iconColor;
+  final Widget leading;
   final String title;
   final String subtitle;
   final bool online;
@@ -44,14 +42,16 @@ class SmartCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, color: iconColor, size: 26),
+              leading,
               const Spacer(),
               Text(
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style:
-                    const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 2),
               Row(
@@ -62,7 +62,9 @@ class SmartCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          color: CupertinoColors.systemGrey, fontSize: 12),
+                        color: CupertinoColors.systemGrey,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                   ?trailing,
@@ -114,11 +116,12 @@ class PowerButton extends StatelessWidget {
 
 /// Small pill button used by group controls.
 class PillButton extends StatelessWidget {
-  const PillButton(
-      {super.key,
-      required this.label,
-      required this.filled,
-      required this.onPressed});
+  const PillButton({
+    super.key,
+    required this.label,
+    required this.filled,
+    required this.onPressed,
+  });
 
   final String label;
   final bool filled;
@@ -131,8 +134,9 @@ class PillButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         decoration: BoxDecoration(
-          color:
-              filled ? CupertinoColors.activeBlue : CupertinoColors.systemGrey5,
+          color: filled
+              ? CupertinoColors.activeBlue
+              : CupertinoColors.systemGrey5,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(

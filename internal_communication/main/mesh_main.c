@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <stdio.h>
 #include <inttypes.h>
+#include <stddef.h>
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "esp_event.h"
@@ -74,6 +75,7 @@ static bool s_mqtt_started = false;
  *******************************************************/
 #define MAX_NODES               CONFIG_MESH_ROUTE_TABLE_SIZE
 #define NODE_OFFLINE_TIMEOUT_US (30LL * 1000 * 1000)  /* mark offline after 30s silence */
+#define MESH_STATUS_BASE_SIZE   offsetof(mesh_light_status_t, device_type)
 
 typedef struct {
     bool used;
@@ -83,6 +85,7 @@ typedef struct {
     uint8_t on;            /* last known light state */
     uint8_t layer;
     uint8_t is_root;
+    char device_type[MESH_DEVICE_TYPE_MAX_LEN];
     int64_t last_seen_us;
 } node_entry_t;
 
@@ -155,11 +158,11 @@ static void root_publish_node_status(const node_entry_t *n)
     node_id_str(n->mac, id, sizeof(id));
     char topic[64];
     snprintf(topic, sizeof(topic), MQTT_TOPIC_NODE_PREFIX "%s/status", id);
-    char payload[192];
+    char payload[256];
     snprintf(payload, sizeof(payload),
-             "{\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\"}",
+             "{\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\",\"type\":\"%s\"}",
              id, n->online ? "true" : "false", n->on ? "on" : "off",
-             n->layer, n->is_root ? "root" : "node");
+             n->layer, n->is_root ? "root" : "node", n->device_type);
     esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
 }
 
@@ -190,7 +193,9 @@ static void root_publish_gateway_status(void)
 }
 
 /* Root: record/refresh a node from an upstream status packet, then publish. */
-static void root_handle_node_status(const mesh_addr_t *from, const mesh_light_status_t *st)
+static void root_handle_node_status(const mesh_addr_t *from,
+                                    const mesh_light_status_t *st,
+                                    size_t packet_size)
 {
     if (!from || !st) {
         return;
@@ -207,6 +212,18 @@ static void root_handle_node_status(const mesh_addr_t *from, const mesh_light_st
     s_nodes[idx].on = st->on ? 1 : 0;
     s_nodes[idx].layer = st->layer;
     s_nodes[idx].is_root = st->is_root ? 1 : 0;
+    memset(s_nodes[idx].device_type, 0, sizeof(s_nodes[idx].device_type));
+    if (packet_size > MESH_STATUS_BASE_SIZE) {
+        size_t available = packet_size - MESH_STATUS_BASE_SIZE;
+        size_t copy_len = available < sizeof(s_nodes[idx].device_type) - 1
+                              ? available
+                              : sizeof(s_nodes[idx].device_type) - 1;
+        memcpy(s_nodes[idx].device_type, st->device_type, copy_len);
+    }
+    if (s_nodes[idx].device_type[0] == '\0') {
+        strlcpy(s_nodes[idx].device_type, "light_bulb",
+                sizeof(s_nodes[idx].device_type));
+    }
     s_nodes[idx].online = true;
     s_nodes[idx].last_seen_us = esp_timer_get_time();
     snapshot = s_nodes[idx];
@@ -225,6 +242,8 @@ static void root_refresh_self(void)
         s_nodes[idx].on = s_light_state;
         s_nodes[idx].layer = mesh_layer;
         s_nodes[idx].is_root = 1;
+        strlcpy(s_nodes[idx].device_type, "gateway",
+                sizeof(s_nodes[idx].device_type));
         s_nodes[idx].online = true;
         s_nodes[idx].last_seen_us = esp_timer_get_time();
         snapshot = s_nodes[idx];
@@ -270,6 +289,7 @@ static void send_status_upstream(void)
         .is_root = 0,
     };
     memcpy(st.mac, s_self_mac, 6);
+    strlcpy(st.device_type, CONFIG_MESH_DEVICE_TYPE, sizeof(st.device_type));
     mesh_data_t data = {
         .data = (uint8_t *)&st,
         .size = sizeof(st),
@@ -340,8 +360,9 @@ void esp_mesh_p2p_rx_main(void *arg)
            - MESH_STATUS_CMD (upstream node report): only the root aggregates it.
            - otherwise treat as a light-control message and apply it locally. */
         if (data.size >= 1 && data.data[0] == MESH_STATUS_CMD) {
-            if (esp_mesh_is_root() && data.size >= sizeof(mesh_light_status_t)) {
-                root_handle_node_status(&from, (mesh_light_status_t *)data.data);
+            if (esp_mesh_is_root() && data.size >= MESH_STATUS_BASE_SIZE) {
+                root_handle_node_status(&from, (mesh_light_status_t *)data.data,
+                                        data.size);
             }
             continue;
         }

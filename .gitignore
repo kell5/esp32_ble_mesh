@@ -44,3 +44,6 @@ app/macos/Pods/
 /*.py
 /*.png
 app/*.png
+# Local source artwork and generated per-target configs
+app/image/
+**/sdkconfig.*.generated

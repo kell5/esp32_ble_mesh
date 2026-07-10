@@ -14,6 +14,7 @@
 - `camera_stream/`：ESP32-S3 门铃、OV3660、IO0、MQTT、MJPEG 和中继推流。
 - `internal_communication/`：ESP-WIFI-MESH 网关与节点、MQTT 桥接、节点状态。
 - `server_relay/`：Python MJPEG 公网中继。
+- `docs/DEVICE_ASSET_STATUS.md`：已识别图片、缺失素材、App 映射、固件设备类型协议和测试步骤。
 - `docs/APP_DEVICE_ICON_PROMPTS.md`：App 设备图标视觉规范。
 - `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成时可直接复制的完整提示词。
 
@@ -24,6 +25,7 @@
 - 统一设备首页与设备子页面：完成。
 - 门铃/网关统一 BLE WiFi 配网：代码与构建完成，硬件回归可选。
 - App 前台来电页与后台进程存活时的系统通知：完成；进程被杀后不通知是当前确认需求。
+- 多设备类型与图标资产：已识别 26 张/9 类素材，App、APK、网关和节点固件构建已通过，等待手机验证。
 - Matter over WiFi：待开始。
 - Thread：等待 ESP32-C6/H2 硬件。
 
