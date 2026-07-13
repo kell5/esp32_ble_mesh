@@ -8,7 +8,7 @@
 
 | 角色 | 硬件 | 串口 | 灯/外设 | 本轮约束 |
 |---|---|---|---|---|
-| 门铃 | ESP32-S3 N16R8 + 摄像头 | COM7 | 摄像头、门铃按键 | 保持 Wi-Fi/MQTT/MJPEG 链路；BLE 仅用于 Wi-Fi 配网，不加入 BLE Mesh |
+| 门铃 | ESP32-S3 N8R8 + 摄像头 | COM7 | 摄像头、门铃按键 | 实测 Flash 8 MB、PSRAM 8 MB；保持 Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
 | 灯控节点 A | ESP32-WROOM | COM15 | D2 板载 LED，GPIO2 | 关闭 brownout detector 仅用于当前台架联调；作为 BLE Mesh Generic OnOff Server |
 | BLE Mesh 网关 | ESP32-S3 N16R8 | 待串口枚举确认 | GPIO48 板载 WS2812 RGB | 同时运行 BLE Mesh Provisioner/Client 与 Wi-Fi/MQTT |
 | 其他灯控节点 | ESP32-S3 N16R8 | 待串口枚举确认 | GPIO48 板载 WS2812 RGB | BLE Mesh Generic OnOff Server；按需开启 Relay |
@@ -45,7 +45,7 @@ App / cloud_service  <---------------->  MQTT Broker
                     GPIO2 D2 LED                             GPIO48 WS2812 RGB
                     Generic OnOff Server                     Generic OnOff Server
 
-门铃 ESP32-S3 N16R8：独立 Wi-Fi/MQTT/视频链路，不加入 BLE Mesh。
+门铃 ESP32-S3 N8R8：独立 Wi-Fi/MQTT/视频链路，不加入 BLE Mesh。
 ```
 
 普通灯节点只运行 BLE Mesh，不连接家庭 Wi-Fi，也不运行 MQTT。网关负责：
@@ -89,7 +89,7 @@ App / cloud_service  <---------------->  MQTT Broker
 
 ### 阶段 1：COM7 门铃基线
 
-1. 按 ESP32-S3 N16R8 配置构建门铃固件。
+1. 按 ESP32-S3 N8R8 配置构建门铃固件；`camera_stream/sdkconfig.defaults` 保持 8 MB Flash 配置。
 2. 刷写 COM7 并监控启动。
 3. 验证摄像头初始化、Wi-Fi/MQTT、heartbeat/LWT、门铃事件、命令 ACK、本地和中继视频。
 4. 门铃验证通过后不得为 BLE Mesh 改动其无线架构。
@@ -125,7 +125,7 @@ App / cloud_service  <---------------->  MQTT Broker
 
 | 验收项 | 通过标准 |
 |---|---|
-| 硬件识别 | 读取结果为 ESP32-S3，Flash 16 MB、PSRAM 8 MB；与 N16R8 相符 |
+| 硬件识别 | 读取结果为 ESP32-S3，Flash 8 MB、PSRAM 8 MB；与 N8R8 相符 |
 | 稳定启动 | 连续运行 10 分钟无 panic、watchdog、循环重启 |
 | 摄像头 | OV3660 初始化成功；连续观看本地 MJPEG 60 秒无崩溃 |
 | Wi-Fi/MQTT | 获取 IP，MQTT connected；heartbeat/status 可在 broker/cloud 观察 |

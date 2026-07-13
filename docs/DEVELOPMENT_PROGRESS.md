@@ -63,7 +63,7 @@ Flutter App
 
 | 角色 | 硬件 | 串口 | 当前说明 |
 |---|---|---|---|
-| 门铃 | ESP32-S3 N16R8 + OV3660 | COM7 | Wi-Fi/MQTT/MJPEG；门铃产品板，不加入 BLE Mesh |
+| 门铃 | ESP32-S3 N8R8 + OV3660 | COM7 | 实测 Flash 8 MB、PSRAM 8 MB；Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
 | BLE Mesh 灯节点 A | ESP32/WROOM | COM15 | 仅有 GPIO2/D2 板载 LED；台架构建关闭 brownout |
 | BLE Mesh + Wi-Fi 网关 | ESP32-S3 N16R8 | 待枚举确认 | Provisioner/Generic OnOff Client + Wi-Fi/MQTT bridge；GPIO48 WS2812 |
 | 其他 BLE Mesh 灯节点 | ESP32-S3 N16R8 | 待枚举确认 | Generic OnOff Server；GPIO48 WS2812 |
