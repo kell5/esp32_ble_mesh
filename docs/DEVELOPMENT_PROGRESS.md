@@ -133,9 +133,11 @@ Flutter App
 - [x] 门铃保持独立 Wi-Fi/MQTT/视频链路，不加入 BLE Mesh。
 - [x] 乐鑫官方示例已放入工作区作为参考，覆盖 Provisioner、Generic OnOff Server 和 Wi-Fi coexist。
 - [x] 当前硬件约束确认：COM15 WROOM 使用 GPIO2/D2，其他 N16R8 使用 GPIO48 WS2812。
-- [ ] 提交联调计划和结果判定标准。
-- [ ] COM7 门铃基线刷写和视频/MQTT 验证。
-- [ ] COM15 WROOM Generic OnOff Server 刷写、配网、GPIO2 灯控和重启恢复验证。
+- [x] 提交联调计划和结果判定标准。
+- [x] COM7 N8R8 门铃固件构建和刷写成功；OV3660、Wi-Fi、MQTT 启动验证通过。
+- [ ] COM7 尚需实体按键、60 秒视频观看和云端命令 ACK 验收。
+- [x] COM15 WROOM Generic OnOff Server 已完成 GPIO2、brownout-off、settings 和单元素适配，离线构建通过。
+- [ ] COM15 自动复位无法进入下载模式，需人工按住 BOOT 后完成刷写、配网、GPIO2 灯控和重启恢复验证。
 - [ ] N16R8 BLE Mesh + Wi-Fi/MQTT 网关实现与共存压力验证。
 
 详细步骤、判定阈值和结果记录见 [MESH_HARDWARE_INTEGRATION_PLAN.md](MESH_HARDWARE_INTEGRATION_PLAN.md)。

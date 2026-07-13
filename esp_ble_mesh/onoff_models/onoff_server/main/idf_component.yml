@@ -1,0 +1,3 @@
+dependencies:
+  example_init:
+    path: ../../../common_components/example_init

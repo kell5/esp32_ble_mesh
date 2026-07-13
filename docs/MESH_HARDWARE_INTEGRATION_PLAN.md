@@ -167,8 +167,8 @@ App / cloud_service  <---------------->  MQTT Broker
 
 | 日期 | 固件提交 | 设备/串口 | 测试范围 | 结果 | 证据/备注 |
 |---|---|---|---|---|---|
-| 2026-07-13 | 待填写 | COM7 门铃 | 待执行 | 待执行 | 文档先行 |
-| 2026-07-13 | 待填写 | COM15 WROOM | 待执行 | 待执行 | brownout 关闭仅限台架 |
+| 2026-07-13 | `253c8c5` | COM7 门铃 N8R8 | 识别、构建、刷写、启动、摄像头、Wi-Fi、MQTT | 部分通过 | 实测 Flash 8 MB/PSRAM 8 MB；OV3660 和 HTTP 服务初始化成功；Wi-Fi 获取 IP、MQTT connected。尚未完成实体按键 3 次、60 秒视频观看和云端命令 ACK |
+| 2026-07-13 | 待提交 | COM15 WROOM | BLE Mesh Generic OnOff Server 离线构建 | 部分通过/刷写阻塞 | GPIO2 单灯、单元素、settings、Generic Server、`CONFIG_ESP_BROWNOUT_DET=n` 构建通过；COM15 自动/软件复位均无法进入下载模式，esptool 报 `No serial data received`，需人工按住 BOOT 后重试 |
 | 2026-07-13 | 待填写 | N16R8 网关/节点 | 待枚举 | 待执行 | 需要至少一块网关；分组验收需要至少两个灯节点 |
 
 每轮联调结束后更新本表，并在 `docs/DEVELOPMENT_PROGRESS.md` 中只写已经有证据的结论。
