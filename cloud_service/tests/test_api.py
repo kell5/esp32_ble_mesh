@@ -223,6 +223,41 @@ class CloudApiTest(unittest.TestCase):
         self.assertEqual(events.status_code, 200, events.text)
         self.assertEqual([item["event"] for item in events.json()], ["ringing"])
 
+    def test_normalized_ack_on_event_channel_is_not_recorded_as_event(self) -> None:
+        envelope = {
+            "v": 1,
+            "msg_id": "door-ack-1",
+            "ts": 1730000000,
+            "type": "ack",
+            "data": {"ack_msg_id": "cloud-command-1"},
+        }
+        self.app.state.mqtt_bridge.ingest(
+            "farmely/doorbell/door-new/up/event",
+            json.dumps(envelope).encode(),
+        )
+        self.app.state.mqtt_bridge.ingest(
+            "doorbell/door-new/event",
+            json.dumps(
+                {
+                    "version": 1,
+                    "message_id": "door-ack-legacy-1",
+                    "event": "ack",
+                    "ack_msg_id": "cloud-command-1",
+                }
+            ).encode(),
+        )
+
+        shadow = self.client.get("/api/v1/devices/door-new/shadow", headers=self.headers)
+        self.assertEqual(shadow.status_code, 200, shadow.text)
+        self.assertEqual(
+            shadow.json()["reported"]["ack_msg_id"],
+            "cloud-command-1",
+        )
+
+        events = self.client.get("/api/v1/devices/door-new/events", headers=self.headers)
+        self.assertEqual(events.status_code, 200, events.text)
+        self.assertEqual(events.json(), [])
+
     def test_stale_device_gets_offline_reason(self) -> None:
         payload = json.dumps({"online": True, "state": "off", "type": "relay"}).encode()
         self.app.state.mqtt_bridge.ingest("office/light/node/node-stale/status", payload)

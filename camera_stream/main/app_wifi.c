@@ -1,5 +1,7 @@
 #include "app_wifi.h"
 
+#include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -9,6 +11,7 @@
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
+#include "esp_random.h"
 #include "sdkconfig.h"
 
 #include "network_provisioning/manager.h"
@@ -23,6 +26,48 @@ static const char *TAG = "app_wifi";
 #define WIFI_CONNECTED_BIT BIT0
 
 static EventGroupHandle_t s_wifi_event_group;
+static char s_device_id[32] = {0};
+
+static void build_device_id(void)
+{
+    if (s_device_id[0] != 0) return;
+    /* Use Kconfig EXAMPLE_DOORBELL_ID as device identity.
+       For production each board must be built with a unique ID. */
+    strncpy(s_device_id, CONFIG_EXAMPLE_DOORBELL_ID, sizeof(s_device_id) - 1);
+}
+
+const char *app_wifi_get_device_id(void)
+{
+    if (s_device_id[0] == 0) {
+        build_device_id();
+    }
+    return s_device_id;
+}
+
+/* Provisioning custom-data endpoint handler — returns device_id + claim_code */
+static esp_err_t custom_data_handler(uint32_t session_id, const uint8_t *inbuf,
+                                     ssize_t inlen, uint8_t **outbuf,
+                                     ssize_t *outlen, void *priv_data)
+{
+    /* Build response JSON */
+    (void)session_id; (void)inbuf; (void)inlen; (void)priv_data;
+    const char *devid = app_wifi_get_device_id();
+    uint32_t claim_code = esp_random();
+    char resp[128];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"device_id\":\"%s\",\"claim_code\":\"%08" PRIx32 "\"}",
+                     devid, claim_code);
+    if (n < 0 || n >= (int)sizeof(resp)) {
+        return ESP_ERR_NO_MEM;
+    }
+    *outbuf = malloc(n + 1);
+    if (*outbuf == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(*outbuf, resp, n + 1);
+    *outlen = n + 1;
+    return ESP_OK;
+}
 
 static void build_service_name(char *out, size_t max)
 {
@@ -90,6 +135,7 @@ esp_err_t app_wifi_connect(void)
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    build_device_id();
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(NETWORK_PROV_EVENT, ESP_EVENT_ANY_ID,
                                                         &event_handler, NULL, NULL));
@@ -126,8 +172,11 @@ esp_err_t app_wifi_connect(void)
 #else
         ESP_LOGI(TAG, "not provisioned -> SoftAP name: %s", service_name);
 #endif
+        ESP_ERROR_CHECK(network_prov_mgr_endpoint_create("custom-data"));
         ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
             NETWORK_PROV_SECURITY_1, (const void *)pop, service_name, NULL));
+        ESP_ERROR_CHECK(network_prov_mgr_endpoint_register(
+            "custom-data", custom_data_handler, NULL));
         network_prov_mgr_wait();
         ESP_ERROR_CHECK(network_prov_mgr_deinit());
     } else {

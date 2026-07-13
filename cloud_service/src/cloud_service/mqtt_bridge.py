@@ -214,11 +214,15 @@ class MqttBridge:
             return True
 
         message_type = envelope_type or channel
+        if message_type == "ack":
+            self._ingest_farmely_reported(device_class, device_id, data, message_id)
+            return True
+
         if channel == "event" or message_type == "event":
             self._ingest_farmely_event(device_class, device_id, data, message_id)
             return True
 
-        if channel in {"status", "shadow"} or message_type in {"status", "ack"}:
+        if channel in {"status", "shadow"} or message_type == "status":
             self._ingest_farmely_reported(device_class, device_id, data, message_id)
             return True
 
@@ -424,6 +428,16 @@ class MqttBridge:
         if event is None:
             return
         self._store.register_device(doorbell_id, "doorbell", "智能门铃", {"source": "doorbell"})
+        if event == "ack" and isinstance(document, dict):
+            ack_message_id = document.get("ack_msg_id")
+            if isinstance(ack_message_id, str):
+                self._apply_reported(
+                    doorbell_id,
+                    {"online": True, "type": "doorbell", "ack_msg_id": ack_message_id},
+                    message_id=message_id,
+                    offline_reason=None,
+                )
+            return
         reported: dict[str, JsonValue] = {"online": True, "type": "doorbell", "last_event": event}
         if version is not None:
             reported["version"] = version
