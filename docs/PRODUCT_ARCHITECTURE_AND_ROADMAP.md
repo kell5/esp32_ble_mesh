@@ -5,18 +5,19 @@
 > 本轮只做规划与文档；除"App 系统返回键修复"外，其余为待开发任务。
 
 - 项目：`Mesh_esp32_farmely` / GitHub：`https://github.com/kell5/esp32_ble_mesh`
-- 关联文档：`docs/DEVELOPMENT_PROGRESS.md`（真实进度）、`cloud_service/README.md`（云端 API）
-- 最近更新：`2026-07-10`
+- 关联文档：`docs/DEVELOPMENT_PROGRESS.md`（真实进度）、`docs/MESH_HARDWARE_INTEGRATION_PLAN.md`（BLE Mesh/Wi-Fi 联调）、`cloud_service/README.md`（云端 API）
+- 最近更新：`2026-07-13`
 - 对标参考：**ESP RainMaker**（乐鑫官方 IoT 云：配网 + 用户-设备绑定 + 设备影子 + 本地控制 + OTA + 回滚，一整套，与本规划高度对应）、Matter（设备能力模型）、涂鸦/米家（账号即空间的 UX）、WebRTC（媒体流）。
 
 ---
 
-## 0. 已确认的四项设计决策（本次讨论结论）
+## 0. 已确认的五项设计决策（本次讨论结论）
 
 1. **账号优先单一范式**：账号是唯一入口，设备属于账号（以云端影子为准）；取消"本地/云端"双标签；本地直连 MQTT 降级为**透明的局域网加速通道**，用户无感知。
 2. **配网即绑定（provision + bind）**：门铃等非 Mesh 设备在 BLE/SoftAP 配网时，App 顺带拿到 `device_id`，配网成功后**自动认领**到当前登录账号，闭环 onboarding。
 3. **媒体流走 WebRTC**：信令走 MQTT、媒体走 WebRTC（产品化目标）；MJPEG 仅作 demo 保留。
 4. **以 ESP RainMaker 模型为主要对标**：借鉴其配网/绑定/影子/OTA/本地控制的成熟模型，少走弯路。
+5. **灯控采用 BLE Mesh + Wi-Fi 网关**：普通灯节点只运行 BLE Mesh；一块 ESP32-S3 N16R8 网关承担 Provisioner/Generic OnOff Client 和 Wi-Fi/MQTT bridge。门铃保持独立 Wi-Fi 链路。
 
 ---
 
@@ -41,18 +42,18 @@
                                     ▼
         ┌───────────────── MQTT Broker（第三方维护, 121.40.131.194）─────────────────┐
         │                               │                              │
-   Mesh 网关(root)                 门铃/摄像头(直连WiFi)          未来直连传感器/执行器
-   ├ ESP-WIFI-MESH               ├ 信令: MQTT                    └ 信令: MQTT
-   ├ MQTT 上下行桥接              ├ 媒体: MJPEG(demo)→WebRTC(产品)
-   └ 子节点状态聚合               └ OTA: esp_https_ota
+   BLE Mesh + Wi-Fi 网关           门铃/摄像头(直连WiFi)          未来直连传感器/执行器
+   ├ BLE Mesh Provisioner/Client  ├ 信令: MQTT                    └ 信令: MQTT
+   ├ Wi-Fi + MQTT 上下行桥接       ├ 媒体: MJPEG(demo)→WebRTC(产品)
+   └ 子节点状态聚合/离线缓存        └ OTA: esp_https_ota
         │
-   Mesh 子节点（无独立 WiFi/BLE，经网关入网/OTA）
+   BLE Mesh 灯控节点（无家庭 Wi-Fi/MQTT，经网关接云）
 ```
 
 ### 设备接入三分类（贯穿协议/配网/OTA）
 | 类别 | 例子 | 信令传输 | 媒体传输 | 配网方式 | OTA 方式 |
 |---|---|---|---|---|---|
-| A. Mesh 子设备 | 灯、开关、传感器 | 经网关 MQTT 桥接 | 无 | 上电自动入网（认领网关即可） | Mesh OTA（root 分发） |
+| A. BLE Mesh 子设备 | 灯、开关、传感器 | BLE Mesh，经网关 MQTT 桥接 | 无 | 网关 Provisioner 配网（认领网关即可） | BLE Mesh OTA/网关分发（规划） |
 | B. 直连 WiFi 低带宽 | 门铃信令、直连传感器 | MQTT 直连 | 无 | BLE/SoftAP 配网 + 自动绑定 | `esp_https_ota` |
 | C. 媒体流设备 | 门铃视频、摄像头 | MQTT（信令） | WebRTC(产品)/MJPEG(demo) | BLE/SoftAP 配网 + 自动绑定 | `esp_https_ota` |
 

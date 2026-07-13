@@ -63,13 +63,13 @@ Flutter App
 
 | 角色 | 硬件 | 串口 | 当前说明 |
 |---|---|---|---|
-| 门铃 | ESP32-S3 N16R8 + OV3660 | COM8 | IO0 短按门铃；长按约 3 秒重置配网 |
-| Mesh 网关/root | ESP32-S3 N16R8 | COM4 | MQTT 桥接；网关专用 BLE 配网配置 |
-| Mesh 节点 1 | ESP32/WROOM | COM6 | 板载 D2 灯；节点构建关闭 brownout 作为供电兜底 |
-| Mesh 节点 2 | ESP32-S3 N16R8 | COM14 | 已烧节点固件，可自动入网和上报状态 |
+| 门铃 | ESP32-S3 N16R8 + OV3660 | COM7 | Wi-Fi/MQTT/MJPEG；门铃产品板，不加入 BLE Mesh |
+| BLE Mesh 灯节点 A | ESP32/WROOM | COM15 | 仅有 GPIO2/D2 板载 LED；台架构建关闭 brownout |
+| BLE Mesh + Wi-Fi 网关 | ESP32-S3 N16R8 | 待枚举确认 | Provisioner/Generic OnOff Client + Wi-Fi/MQTT bridge；GPIO48 WS2812 |
+| 其他 BLE Mesh 灯节点 | ESP32-S3 N16R8 | 待枚举确认 | Generic OnOff Server；GPIO48 WS2812 |
 | Android 测试机 | MEP AN00 | ADB `AQRVUT5B11011314` | Flutter 调试安装目标 |
 
-> 不要把 COM8 当作 Mesh 网关烧录；COM8 是门铃产品板。
+> COM8、COM4、COM6、COM14 是历史连接记录。本轮以 COM7 门铃、COM15 WROOM 和重新枚举结果为准；每次刷写前先读取芯片信息。
 
 ## 5. 协议与固定接口
 
@@ -113,7 +113,7 @@ Flutter App
 - [x] 公网 MJPEG 中继。
 - [x] App 本地/中继切换、快照、呼叫页。
 
-### Phase A-1：Mesh 灯控产品化 — 已完成
+### Phase A-1：ESP-WIFI-MESH 灯控 — 代码完成，正式硬件验收未完成
 
 - [x] 节点上电自动加入 Mesh。
 - [x] node → root 使用 `MESH_DATA_P2P` 上报状态。
@@ -122,6 +122,23 @@ Flutter App
 - [x] 修复 RMT/WS2812 多任务并发死锁。
 - [x] App 两列设备卡片、网关详情、灯详情。
 - [x] 设备模型预留 `type/name/value`。
+- [x] ESP32-S3 gateway 与 ESP32 node 固件构建通过。
+- [x] 历史记录显示 COM14 曾烧录节点并能自动入网/上报。
+- [ ] 缺少可复现的 root + 至少两个节点完整 UART 日志和逐项结果，不能标记为“Wi-Fi Mesh 已完整验证成功”。
+- [ ] 若作为回退方案正式验收，需补自动组网、单播、广播、断电重连、离线判定和持续运行测试。
+
+### Phase A-1B：BLE Mesh 灯控 + Wi-Fi 网关 — 联调准备中
+
+- [x] 架构确认：普通灯节点使用 BLE Mesh Generic OnOff；N16R8 网关同时运行 BLE Mesh Provisioner/Client 与 Wi-Fi/MQTT。
+- [x] 门铃保持独立 Wi-Fi/MQTT/视频链路，不加入 BLE Mesh。
+- [x] 乐鑫官方示例已放入工作区作为参考，覆盖 Provisioner、Generic OnOff Server 和 Wi-Fi coexist。
+- [x] 当前硬件约束确认：COM15 WROOM 使用 GPIO2/D2，其他 N16R8 使用 GPIO48 WS2812。
+- [ ] 提交联调计划和结果判定标准。
+- [ ] COM7 门铃基线刷写和视频/MQTT 验证。
+- [ ] COM15 WROOM Generic OnOff Server 刷写、配网、GPIO2 灯控和重启恢复验证。
+- [ ] N16R8 BLE Mesh + Wi-Fi/MQTT 网关实现与共存压力验证。
+
+详细步骤、判定阈值和结果记录见 [MESH_HARDWARE_INTEGRATION_PLAN.md](MESH_HARDWARE_INTEGRATION_PLAN.md)。
 
 ### Phase A-2：统一设备 App 与 BLE 配网 — 代码和构建已完成
 
@@ -278,24 +295,22 @@ Flutter App
 2. **不得改变现有 MQTT topic 语义**：新协议应兼容旧 `demo/cmd`。
 3. **不得给普通 Mesh 节点强制开启网关 BLE 配网**。
 4. ESP32 节点固件 app 分区余量约 1%，新增组件前先检查尺寸。
-5. COM6 关闭 brownout 只是供电不足的兜底，存在掉电/闪存风险，最终应改善供电。
+5. COM15 WROOM 关闭 brownout 只是当前台架供电不足的兜底，存在异常执行和 Flash 损坏风险；量产必须改善供电并恢复保护。
 6. BLE 配网只支持 2.4 GHz WiFi；错误提示不要暗示 ESP32 可连接 5 GHz。
 7. 通知仅保证 App 前台和后台进程存活场景；进程被杀后不通知是当前确认需求。
 8. 不提交 `build/`、生成的 `sdkconfig.*.generated`、日志、截图和临时脚本。
 9. 当前 26 张图片是 RGB 棋盘格背景测试素材；正式发布前应替换为无平台标识、透明背景、状态一致的素材。
 10. 窗帘、阀门、门锁等目前只复用 on/off 协议和板载 LED 指示，尚未实现真实电机、限位、继电器与安全保护。
-11. COM6 WROOM 当前已断电；本轮不连接、不烧录，仅做节点固件构建验证。
+11. BLE Mesh 与 Wi-Fi 可在同一 ESP32-S3 网关共存，但共用 2.4 GHz 射频；未经 30 分钟并行和命令压力测试不得标记为稳定。
 
 ## 10. 下一步优先级
 
-1. 完成 Phase A-4 的 Flutter analyze、debug APK、ESP32-S3 网关和 ESP32 节点构建。
-2. 将新版 APK 安装到已连接手机，检查设备图标、离线态、类型文案和详情页。
-3. WROOM 上电后由用户选择节点类型并烧录，验证 MQTT `type` 和 App 卡片同步变化。
-4. 将当前功能分支合并到 `main`。
-5. 可选：用测试手机验证 App 退到后台后按 COM8 IO0，系统通知出现且点击能进入门铃页。
-6. 可选：擦除门铃或网关 WiFi，完成一次真实 BLE 配网闭环。
-7. 设计 Phase B 的设备注册、影子、LWT、OTA、房间和自动化接口。
-8. 准备 Matter over WiFi 灯/插座演示节点。
+1. 按 `MESH_HARDWARE_INTEGRATION_PLAN.md` 先保存 COM7 门铃基线并完成摄像头、Wi-Fi/MQTT 和事件验证。
+2. 将 COM15 构建为 BLE Mesh Generic OnOff Server：关闭 brownout、仅驱动 GPIO2/D2，并验证持久化。
+3. 从 N16R8 中确认一块网关板，复用官方 Provisioner 与 Wi-Fi coexist 逻辑接入现有 MQTT bridge。
+4. 至少增加第二个 BLE Mesh 灯节点后验证单播、分组、重启恢复和 Wi-Fi/BLE 共存压力。
+5. 将 ESP-WIFI-MESH 保留为回归基线；若仍需宣称正式通过，补齐 root + 两节点的完整硬件验收证据。
+6. BLE Mesh 主链路稳定后再推进 OTA、WebRTC 和 Matter。
 
 ### 下一阶段（已规划，见 `docs/PRODUCT_ARCHITECTURE_AND_ROADMAP.md`）
 
