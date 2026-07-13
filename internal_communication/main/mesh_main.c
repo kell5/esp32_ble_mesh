@@ -21,6 +21,7 @@
 #include "mesh_light.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
+#include <time.h>
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -72,7 +73,15 @@ static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 static bool s_mqtt_started = false;
 static uint32_t s_status_boot_nonce = 0;
 static uint32_t s_status_sequence = 0;
-static char s_gateway_lwt_payload[224];
+static char s_gateway_lwt_payload[384];
+
+/* Gateway capabilities (used in unified-envelope publications) */
+static const char *s_gateway_capabilities[] = {
+    "gateway.mesh",
+    "system.fw_version",
+    "system.online",
+    NULL
+};
 
 /*******************************************************
  *   Per-node registry (maintained on the root)
@@ -135,13 +144,40 @@ static void status_message_id(const char *device_id, char *out, size_t max)
              device_id, s_status_boot_nonce, sequence);
 }
 
+static void unix_ts_s(int64_t *ts)
+{
+    time_t now;
+    time(&now);
+    *ts = (now > 1730000000) ? (int64_t)now : 0;
+}
+
+static void caps_json(const char *caps[], char *out, size_t max)
+{
+    size_t pos = 0;
+    pos += snprintf(out + pos, max - pos, "[");
+    for (int i = 0; caps[i] != NULL; i++) {
+        if (i > 0) pos += snprintf(out + pos, max - pos, ",");
+        pos += snprintf(out + pos, max - pos, "\"%s\"", caps[i]);
+    }
+    snprintf(out + pos, max - pos, "]");
+}
+
+/* Node capabilities by device type prefix */
+static void node_caps_json(const char *device_type, char *out, size_t max)
+{
+    (void)device_type;
+    snprintf(out, max, "[\"onoff\",\"system.fw_version\",\"system.online\"]");
+}
+
 static void gateway_lwt_payload_init(const char *root_id)
 {
     char message_id[48];
     status_message_id(root_id, message_id, sizeof(message_id));
+    char caps[128];
+    caps_json(s_gateway_capabilities, caps, sizeof(caps));
     snprintf(s_gateway_lwt_payload, sizeof(s_gateway_lwt_payload),
-             "{\"version\":1,\"message_id\":\"%s\",\"online\":false,\"root\":\"%s\",\"type\":\"gateway\",\"offline_reason\":\"mqtt_lwt\"}",
-             message_id, root_id);
+             "{\"version\":1,\"message_id\":\"%s\",\"online\":false,\"root\":\"%s\",\"type\":\"gateway\",\"offline_reason\":\"mqtt_lwt\",\"capabilities\":%s}",
+             message_id, root_id, caps);
 }
 
 static inline void nodes_lock(void)   { if (s_nodes_mtx) xSemaphoreTake(s_nodes_mtx, portMAX_DELAY); }
@@ -180,13 +216,27 @@ static void root_publish_node_status(const node_entry_t *n)
     snprintf(topic, sizeof(topic), MQTT_TOPIC_NODE_PREFIX "%s/status", id);
     char message_id[48];
     status_message_id(id, message_id, sizeof(message_id));
+    int64_t ts = 0;
+    unix_ts_s(&ts);
     const char *offline = n->online ? "" : ",\"offline_reason\":\"mesh_timeout\"";
-    char payload[352];
+    char caps[96];
+    node_caps_json(n->device_type, caps, sizeof(caps));
+    /* Old format (backward compatible) */
+    char payload[384];
     snprintf(payload, sizeof(payload),
-             "{\"version\":1,\"message_id\":\"%s\",\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\",\"type\":\"%s\"%s}",
+             "{\"version\":1,\"message_id\":\"%s\",\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\",\"type\":\"%s\",\"capabilities\":%s%s}",
              message_id, id, n->online ? "true" : "false", n->on ? "on" : "off",
-             n->layer, n->is_root ? "root" : "node", n->device_type, offline);
+             n->layer, n->is_root ? "root" : "node", n->device_type, caps, offline);
     esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
+    /* New format: farmely/light/<id>/up/status */
+    char new_topic[80];
+    snprintf(new_topic, sizeof(new_topic), "farmely/light/%s/up/status", id);
+    char new_payload[768];
+    snprintf(new_payload, sizeof(new_payload),
+             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"status\",\"data\":{\"online\":%s,\"state\":\"%s\",\"type\":\"%s\",\"capabilities\":%s}}",
+             message_id, ts, n->online ? "true" : "false", n->on ? "on" : "off",
+             n->device_type, caps);
+    esp_mqtt_client_publish(s_mqtt_client, new_topic, new_payload, 0, 1, 1);
 }
 
 static void root_publish_gateway_status(void)
@@ -210,11 +260,24 @@ static void root_publish_gateway_status(void)
     node_id_str(s_self_mac, root_id, sizeof(root_id));
     char message_id[48];
     status_message_id(root_id, message_id, sizeof(message_id));
-    char payload[320];
+    char caps[128];
+    caps_json(s_gateway_capabilities, caps, sizeof(caps));
+    /* Old format */
+    char payload[384];
     snprintf(payload, sizeof(payload),
-             "{\"version\":1,\"message_id\":\"%s\",\"online\":true,\"root\":\"%s\",\"layer\":%d,\"nodes\":%d,\"online_nodes\":%d,\"heap\":%" PRId32 "}",
-             message_id, root_id, mesh_layer, total, online, esp_get_minimum_free_heap_size());
+             "{\"version\":1,\"message_id\":\"%s\",\"online\":true,\"root\":\"%s\",\"layer\":%d,\"nodes\":%d,\"online_nodes\":%d,\"heap\":%" PRId32 ",\"capabilities\":%s}",
+             message_id, root_id, mesh_layer, total, online, esp_get_minimum_free_heap_size(), caps);
     esp_mqtt_client_publish(s_mqtt_client, MQTT_TOPIC_GATEWAY_STAT, payload, 0, 1, 1);
+    /* New format */
+    int64_t ts = 0;
+    unix_ts_s(&ts);
+    char new_topic[80];
+    snprintf(new_topic, sizeof(new_topic), "farmely/gateway/%s/up/status", root_id);
+    char new_payload[768];
+    snprintf(new_payload, sizeof(new_payload),
+             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"status\",\"data\":{\"online\":true,\"root\":\"%s\",\"nodes\":%d,\"online_nodes\":%d,\"capabilities\":%s}}",
+             message_id, ts, root_id, total, online, caps);
+    esp_mqtt_client_publish(s_mqtt_client, new_topic, new_payload, 0, 1, 1);
 }
 
 /* Root: record/refresh a node from an upstream status packet, then publish. */
@@ -559,21 +622,101 @@ static void mqtt_handle_node_cmd(const char *id, bool on)
 }
 
 /* Route an inbound MQTT command by topic. Only the root acts on commands. */
+/* Extract first string value after a JSON key */
+static const char *json_extract_str(const char *json, const char *key, int *out_len)
+{
+    if (!json || !key) return NULL;
+    const char *p = strstr(json, key);
+    if (!p) return NULL;
+    p = strchr(p + strlen(key) + 1, '"');
+    if (!p) return NULL;
+    p++;
+    int n = 0;
+    while (p[n] && p[n] != '"') n++;
+    if (n == 0) return NULL;
+    *out_len = n;
+    return p;
+}
+
+/* Send ack for a received command */
+static void publish_ack(const char *device_id, const char *original_msg_id)
+{
+    if (!s_mqtt_client || !device_id) return;
+    char msg_id[48];
+    status_message_id(device_id, msg_id, sizeof(msg_id));
+    int64_t ts = 0;
+    unix_ts_s(&ts);
+    char payload[384];
+    snprintf(payload, sizeof(payload),
+             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"ack\",\"data\":{\"ack_msg_id\":\"%s\"}}",
+             msg_id, ts, original_msg_id ? original_msg_id : "");
+    char topic[80];
+    snprintf(topic, sizeof(topic), "farmely/light/%s/up/event", device_id);
+    esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 0);
+}
+
 static void mqtt_dispatch(const char *topic, int topic_len, const char *payload, int len)
 {
-    if (!topic || !payload || len <= 0 || !esp_mesh_is_root()) {
+    if (!topic || topic_len <= 0 || !payload || len <= 0 || !esp_mesh_is_root()) {
         return;
     }
+    char payload_buf[512];
+    if (len >= (int)sizeof(payload_buf)) {
+        ESP_LOGW(MESH_TAG, "ignoring oversized MQTT payload len=%d", len);
+        return;
+    }
+    memcpy(payload_buf, payload, len);
+    payload_buf[len] = '\0';
+    payload = payload_buf;
+
+    /* Attempt JSON envelope parsing for new-format commands */
+    char msg_id_buf[128] = {0};
+    bool is_new_format = (len > 0 && payload[0] == '{');
+    if (is_new_format) {
+        int mid_len = 0;
+        const char *mid = json_extract_str(payload, "\"msg_id\"", &mid_len);
+        if (mid && mid_len < (int)sizeof(msg_id_buf) - 1) {
+            memcpy(msg_id_buf, mid, mid_len);
+        }
+    }
+
+    /* Determine on/off from either plain string or JSON envelope */
     bool on = false;
-    bool have_on = parse_on_off(payload, len, &on);
+    bool have_on = false;
+
+    if (is_new_format) {
+        const char *v = strstr(payload, "\"data\"");
+        const char *search_in = v ? v : payload;
+        if (strstr(search_in, "\"on\":true")) {
+            on = true; have_on = true;
+        } else if (strstr(search_in, "\"on\":false")) {
+            on = false; have_on = true;
+        }
+    }
+    if (!have_on) {
+        have_on = parse_on_off(payload, len, &on);
+    }
 
     size_t all_len = strlen(MQTT_TOPIC_ALL_CMD);
     size_t demo_len = strlen(MQTT_SUBSCRIBE_TOPIC);
     size_t pre_len = strlen(MQTT_TOPIC_NODE_PREFIX);
     size_t suf_len = strlen(MQTT_TOPIC_NODE_SUFFIX);
+    const char *new_gateway_prefix = "farmely/gateway/";
+    const char *new_light_prefix = "farmely/light/";
+    const char *new_cmd_suffix = "/down/cmd";
+    size_t new_gateway_prefix_len = strlen(new_gateway_prefix);
+    size_t new_light_prefix_len = strlen(new_light_prefix);
+    size_t new_cmd_suffix_len = strlen(new_cmd_suffix);
 
-    if ((topic_len == (int)all_len && strncmp(topic, MQTT_TOPIC_ALL_CMD, all_len) == 0) ||
-        (topic_len == (int)demo_len && strncmp(topic, MQTT_SUBSCRIBE_TOPIC, demo_len) == 0)) {
+    bool is_all = (topic_len == (int)all_len && strncmp(topic, MQTT_TOPIC_ALL_CMD, all_len) == 0);
+    bool is_demo = (topic_len == (int)demo_len && strncmp(topic, MQTT_SUBSCRIBE_TOPIC, demo_len) == 0);
+    bool is_gateway_cmd =
+        (size_t)topic_len > new_gateway_prefix_len + new_cmd_suffix_len &&
+        strncmp(topic, new_gateway_prefix, new_gateway_prefix_len) == 0 &&
+        strncmp(topic + topic_len - new_cmd_suffix_len,
+                new_cmd_suffix, new_cmd_suffix_len) == 0;
+
+    if (is_all || is_demo || is_gateway_cmd) {
         if (have_on) {
             mqtt_handle_broadcast(on);
         } else {
@@ -582,20 +725,42 @@ static void mqtt_dispatch(const char *topic, int topic_len, const char *payload,
         return;
     }
 
-    /* office/light/node/<id>/cmd */
+    /* Extract target device ID from topic */
+    char target_id[24] = {0};
+    bool found = false;
+
+    /* Old format: office/light/node/<id>/cmd */
     if ((size_t)topic_len > pre_len + suf_len &&
         strncmp(topic, MQTT_TOPIC_NODE_PREFIX, pre_len) == 0 &&
         strncmp(topic + topic_len - suf_len, MQTT_TOPIC_NODE_SUFFIX, suf_len) == 0) {
-        char id[24];
         int id_len = topic_len - (int)pre_len - (int)suf_len;
-        if (id_len > 0 && id_len < (int)sizeof(id)) {
-            memcpy(id, topic + pre_len, id_len);
-            id[id_len] = '\0';
-            if (have_on) {
-                mqtt_handle_node_cmd(id, on);
-            } else {
-                ESP_LOGW(MESH_TAG, "unknown node cmd: %.*s", len, payload);
+        if (id_len > 0 && id_len < (int)sizeof(target_id)) {
+            memcpy(target_id, topic + pre_len, id_len);
+            found = true;
+        }
+    }
+    /* New format: farmely/light/<id>/down/cmd */
+    if (!found &&
+        (size_t)topic_len > new_light_prefix_len + new_cmd_suffix_len &&
+        strncmp(topic, new_light_prefix, new_light_prefix_len) == 0 &&
+        strncmp(topic + topic_len - new_cmd_suffix_len,
+                new_cmd_suffix, new_cmd_suffix_len) == 0) {
+        int id_len = topic_len - (int)new_light_prefix_len -
+                     (int)new_cmd_suffix_len;
+        if (id_len > 0 && id_len < (int)sizeof(target_id)) {
+            memcpy(target_id, topic + new_light_prefix_len, id_len);
+            found = true;
+        }
+    }
+
+    if (found && target_id[0]) {
+        if (have_on) {
+            mqtt_handle_node_cmd(target_id, on);
+            if (msg_id_buf[0]) {
+                publish_ack(target_id, msg_id_buf);
             }
+        } else {
+            ESP_LOGW(MESH_TAG, "unknown node cmd: %.*s", len, payload);
         }
         return;
     }
@@ -613,6 +778,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t event_base,
         esp_mqtt_client_subscribe(s_mqtt_client, MQTT_SUBSCRIBE_TOPIC, 1);
         esp_mqtt_client_subscribe(s_mqtt_client, MQTT_TOPIC_ALL_CMD, 1);
         esp_mqtt_client_subscribe(s_mqtt_client, MQTT_TOPIC_NODE_CMD_SUB, 1);
+        esp_mqtt_client_subscribe(s_mqtt_client, "farmely/light/+/down/cmd", 1);
+        esp_mqtt_client_subscribe(s_mqtt_client, "farmely/gateway/+/down/cmd", 1);
         mqtt_publish_status("mqtt_connected");
         root_refresh_self();
         root_publish_gateway_status();
