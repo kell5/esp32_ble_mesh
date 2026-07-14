@@ -9,17 +9,18 @@
 | 角色 | 硬件 | 串口 | 灯/外设 | 本轮约束 |
 |---|---|---|---|---|
 | 门铃 | ESP32-S3 N8R8 + 摄像头 | COM7 | 摄像头、门铃按键 | 实测 Flash 8 MB、PSRAM 8 MB；保持 Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
-| 灯控节点 A | ESP32-WROOM | COM15 | D2 板载 LED，GPIO2 | 关闭 brownout detector 仅用于当前台架联调；作为 BLE Mesh Generic OnOff Server |
-| BLE Mesh 网关 | ESP32-S3 N16R8 | 待串口枚举确认 | GPIO48 板载 WS2812 RGB | 同时运行 BLE Mesh Provisioner/Client 与 Wi-Fi/MQTT |
-| 其他灯控节点 | ESP32-S3 N16R8 | 待串口枚举确认 | GPIO48 板载 WS2812 RGB | BLE Mesh Generic OnOff Server；按需开启 Relay |
+| BLE Mesh 网关 | ESP32-S3 N16R8 | COM4 | GPIO48 板载 WS2812 RGB | 已实测 16 MB Flash、8 MB PSRAM；Provisioner/Config Client/Generic OnOff Client；Wi-Fi/MQTT bridge 已实现但尚未联网验收 |
+| BLE Mesh 灯节点 A | ESP32-S3 N16R8 | COM8 | GPIO48 板载 WS2812 RGB | 已完成 Provisioning、Config 和 Generic OnOff 实物链路 |
+| BLE Mesh 灯节点 B | ESP32-WROOM | COM6 | D2 板载 LED，GPIO2 | 2026-07-14 实测 ESP32-D0WD-V3、4 MB Flash；已配网为第二个 Generic OnOff Server |
+| 非活动端口 | 历史板卡 | COM14、COM15 | 不纳入当前映射 | 两个串口/板卡存在启动或下载异常，不再阻塞主线 |
 
-旧文档中的 COM8、COM4、COM6、COM14 是历史连接记录，不再作为本轮串口映射依据。刷写前必须读取芯片信息再次确认目标，禁止仅凭旧端口号烧录。
+当前固定映射为 COM7 门铃、COM4/COM8 N16R8、COM6 WROOM。串口号不等于永久产品角色；允许在确认芯片型号后把 COM4/COM8 重新刷成网关或普通节点，但每次刷写前必须重新读取芯片信息。
 
-### 1.1 COM15 供电告警处理边界
+### 1.1 WROOM 供电告警处理边界
 
-- 本轮按要求在 ESP32-WROOM 专用构建中设置 `CONFIG_ESP_BROWNOUT_DET=n`。
+- ESP32-WROOM 专用构建设置 `CONFIG_ESP_BROWNOUT_DET=n`，当前目标改为 COM6。
 - 关闭 brownout 只是不再触发欠压复位，不会改善供电质量。
-- 该配置仅允许用于台架联调，不能作为量产默认值；欠压时仍可能发生随机重启、异常执行或 Flash 写入损坏。
+- 该配置不能作为量产默认值；欠压时仍可能发生随机重启、异常执行或 Flash 写入损坏。
 - 验收记录必须保留“brownout 已关闭”的风险说明；量产前应更换稳定电源、USB 线或供电设计并恢复 brownout 保护。
 
 ## 2. Mesh 方案结论
@@ -32,7 +33,7 @@ App / cloud_service  <---------------->  MQTT Broker
                                                 |
                                                 | Wi-Fi STA
                                                 v
-                                   ESP32-S3 N16R8 网关
+                                   COM4 ESP32-S3 N16R8 网关
                                    - BLE Mesh Provisioner
                                    - Config Client
                                    - Generic OnOff Client
@@ -41,11 +42,12 @@ App / cloud_service  <---------------->  MQTT Broker
                                           BLE Mesh
                            +--------------------+--------------------+
                            |                                         |
-                    ESP32-WROOM 灯节点                       ESP32-S3 N16R8 灯节点
-                    GPIO2 D2 LED                             GPIO48 WS2812 RGB
+                    COM8 ESP32-S3 N16R8 灯节点              后续 N16R8 灯节点
+                    GPIO48 WS2812 RGB                        GPIO48 WS2812 RGB
                     Generic OnOff Server                     Generic OnOff Server
 
 门铃 ESP32-S3 N8R8：独立 Wi-Fi/MQTT/视频链路，不加入 BLE Mesh。
+COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 ```
 
 普通灯节点只运行 BLE Mesh，不连接家庭 Wi-Fi，也不运行 MQTT。网关负责：
@@ -54,6 +56,8 @@ App / cloud_service  <---------------->  MQTT Broker
 2. 将 MQTT 单设备/分组命令映射到 BLE Mesh Generic OnOff；
 3. 将节点 OnOff Status、在线状态和标识映射回统一 MQTT 协议；
 4. 在 Wi-Fi 短时中断时保留本地 BLE Mesh 控制能力，恢复后补发最新状态。
+
+当前阶段暂不进行 Flutter App 联调；App 仍为 PR #4 合并后的版本，BLE Mesh 新网关的发现、设备映射和控制界面留到固件链路稳定后再对接。
 
 ### 2.2 BLE 与 Wi-Fi 能否结合
 
@@ -84,7 +88,7 @@ App / cloud_service  <---------------->  MQTT Broker
 ### 阶段 0：文档与基线
 
 1. 提交本文和总进度/架构文档更新。
-2. 枚举串口，读取 COM7、COM15 及其他串口的芯片型号、Flash、PSRAM，不写 Flash。
+2. 枚举串口，读取 COM7、COM4、COM8、COM6 的芯片型号、Flash、PSRAM，不凭端口号猜测硬件。
 3. 保存现有固件启动日志，确认当前故障与功能基线。
 
 ### 阶段 1：COM7 门铃基线
@@ -94,15 +98,12 @@ App / cloud_service  <---------------->  MQTT Broker
 3. 验证摄像头初始化、Wi-Fi/MQTT、heartbeat/LWT、门铃事件、命令 ACK、本地和中继视频。
 4. 门铃验证通过后不得为 BLE Mesh 改动其无线架构。
 
-### 阶段 2：COM15 BLE Mesh 灯节点
+### 阶段 2：N16R8 BLE Mesh 灯节点
 
 1. 从乐鑫官方 Generic OnOff Server 复用模型、配网和持久化流程。
-2. ESP32-WROOM 专用配置：
-   - `CONFIG_ESP_BROWNOUT_DET=n`；
-   - 单灯输出 GPIO2；
-   - 不初始化不存在的三路 RGB GPIO；
-   - 开启 BLE Mesh settings，重启后保留网络密钥和配置。
-3. 构建、刷写 COM15，确认进入未配网广播状态。
+2. ESP32-S3 N16R8 使用 GPIO48 WS2812 RMT 驱动、单元素 Generic OnOff Server 和 BLE Mesh settings。
+3. COM8 作为当前 N16R8 主节点。
+4. COM6 WROOM 使用 GPIO2、brownout-off 和 BLE Mesh settings，作为第二节点补充分组控制。
 
 ### 阶段 3：N16R8 BLE Mesh + Wi-Fi 网关
 
@@ -110,7 +111,7 @@ App / cloud_service  <---------------->  MQTT Broker
 2. 网关提供 Provisioner、Config Client、Generic OnOff Client。
 3. 接入现有 MQTT 新旧 topic 映射，避免改变云端协议。
 4. 配置 GPIO48 WS2812 作为网关状态指示。
-5. 自动发现并配网 COM15，完成 NetKey/AppKey、Model App Bind 和订阅配置。
+5. 自动发现并配网 N16R8 节点，完成 NetKey/AppKey、Composition Data、Model App Bind 和 Generic OnOff Get/Set/Status。
 
 ### 阶段 4：多节点与共存压力
 
@@ -133,15 +134,15 @@ App / cloud_service  <---------------->  MQTT Broker
 | 云端命令 | 至少执行 1 次支持的命令并收到对应 ACK |
 | 公网链路 | 中继健康时可观看 60 秒；若外部服务不可用，明确记为环境阻塞，不算固件通过 |
 
-### 4.2 COM15 WROOM 灯节点
+### 4.2 BLE Mesh 灯节点
 
 | 验收项 | 通过标准 |
 |---|---|
-| 硬件识别 | 读取结果为 ESP32；刷写目标和分区与 WROOM 配置一致 |
-| Brownout 配置 | 构建配置确认 `CONFIG_ESP_BROWNOUT_DET=n`，启动日志不再出现 brownout reset |
-| 基础稳定性 | 连续运行 10 分钟无 panic、watchdog、循环重启；欠压风险仍单独记录 |
+| 硬件识别 | N16R8 读取结果为 ESP32-S3、Flash 16 MB、PSRAM 8 MB；WROOM 旧基线单独记录 |
+| GPIO 驱动 | N16R8 通过 RMT 驱动 GPIO48 WS2812；不得用普通 GPIO 电平代替 WS2812 时序 |
+| 基础稳定性 | 连续运行 10 分钟无 panic、watchdog、循环重启 |
 | BLE Mesh 配网 | 网关 60 秒内发现，120 秒内完成 provisioning、AppKey 添加和 Model Bind |
-| 灯控 | 20 次交替 On/Off 全部正确驱动 GPIO2 D2 LED，状态回复与实灯一致 |
+| 灯控 | 20 次交替 On/Off 全部正确驱动目标灯，状态回复与实灯一致 |
 | 持久化 | 节点重启后 60 秒内恢复网络，无需重新 provisioning |
 
 ### 4.3 BLE Mesh + Wi-Fi 网关
@@ -168,7 +169,12 @@ App / cloud_service  <---------------->  MQTT Broker
 | 日期 | 固件提交 | 设备/串口 | 测试范围 | 结果 | 证据/备注 |
 |---|---|---|---|---|---|
 | 2026-07-13 | `253c8c5` | COM7 门铃 N8R8 | 识别、构建、刷写、启动、摄像头、Wi-Fi、MQTT | 部分通过 | 实测 Flash 8 MB/PSRAM 8 MB；OV3660 和 HTTP 服务初始化成功；Wi-Fi 获取 IP、MQTT connected。尚未完成实体按键 3 次、60 秒视频观看和云端命令 ACK |
-| 2026-07-13 | 待提交 | COM15 WROOM | BLE Mesh Generic OnOff Server 离线构建 | 部分通过/刷写阻塞 | GPIO2 单灯、单元素、settings、Generic Server、`CONFIG_ESP_BROWNOUT_DET=n` 构建通过；COM15 自动/软件复位均无法进入下载模式，esptool 报 `No serial data received`，需人工按住 BOOT 后重试 |
-| 2026-07-13 | 待填写 | N16R8 网关/节点 | 待枚举 | 待执行 | 需要至少一块网关；分组验收需要至少两个灯节点 |
+| 2026-07-13 | 本轮 BLE Mesh 分支 | COM15 WROOM | BLE Mesh Generic OnOff Server 离线构建 | 已弃用 | GPIO2 单灯、settings、Generic Server、`CONFIG_ESP_BROWNOUT_DET=n` 构建通过；串口始终无下载数据，用户决定不再使用该板 |
+| 2026-07-13 | 本轮 BLE Mesh 分支 | COM14 N16R8 | 节点构建、刷写、启动诊断 | 阻塞 | 16 MB Flash/8 MB PSRAM 识别和固件写入校验通过；`farmely_node` NVS 始终为空。同一节点固件在 COM4 可运行到 BLE Mesh 初始化，当前结论为 COM14 启动/复位路径阻塞，不是 BLE Mesh 射频失败 |
+| 2026-07-13 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8 节点 | Provisioning、Composition Data、AppKey、Model Bind、Generic OnOff Get/Set/Status | 部分通过 | COM4 NVS 达到 `farmely_mesh:stage=8, addr=5, onoff=1`；COM8 达到 `farmely_node:stage=7, addr=5, onoff=1`，证明完整双板 BLE Mesh 控制链路通过 |
+| 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8 节点 | 网关重启、节点重启和 settings 恢复 | 部分通过 | COM8 已刷入最新节点固件，重启后保持 `stage=5, addr=5, onoff=0`；COM4 保留 NVS 重刷最新网关后自动查询节点并达到 `stage=9`，未重复 Provisioning。COM8 的 On 状态实灯恢复仍待命令链路复验 |
+| 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 N16R8 网关 | Wi-Fi STA + MQTT bridge、normalized/legacy topic、ACK/status 映射 | 代码完成/运行未验收 | 网关固件构建成功，`provisioner.bin` 824896 bytes、app 分区剩余 46%，并已刷入 COM4；当前配置未写入 Wi-Fi/MQTT 凭据，因此不能标记联网、云端闭环或共存压力通过 |
+| 2026-07-14 | 本轮 BLE Mesh 分支 | COM6 WROOM | 串口识别、构建、刷写、Provisioning、配置和重启恢复 | 部分通过 | esptool 识别 ESP32-D0WD-V3 rev 3.1、4 MB Flash；WROOM 固件 811424 bytes、app 分区剩余 47%；已配网为地址 `0x0006`，重启后保持 `farmely_node:stage=7, addr=6, onoff=1`。尚待人工确认 GPIO2/D2 实灯状态 |
+| 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8/COM6 双节点 | 双节点记录与网关重启恢复 | 部分通过 | 网关 NVS 同时包含 `pn/0005`、`pn/0006` 和持久化 `nodes`；重启查询后达到 `farmely_mesh:stage=9, addr=6, onoff=1`。已证明两个节点地址不重复，分组地址和 50 次定向无误控尚未测试 |
 
 每轮联调结束后更新本表，并在 `docs/DEVELOPMENT_PROGRESS.md` 中只写已经有证据的结论。

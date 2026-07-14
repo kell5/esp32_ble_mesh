@@ -1,0 +1,7 @@
+dependencies:
+  example_init:
+    path: ../../common_components/example_init
+  espressif/cjson:
+    version: "1.7.19~2"
+  espressif/mqtt:
+    version: "1.0.0"

@@ -1,0 +1,23 @@
+menu "Farmely BLE Mesh gateway"
+
+config FARMELY_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+
+config FARMELY_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+
+config FARMELY_MQTT_URI
+    string "MQTT broker URI"
+    default ""
+
+config FARMELY_MQTT_USERNAME
+    string "MQTT username"
+    default ""
+
+config FARMELY_MQTT_PASSWORD
+    string "MQTT password"
+    default ""
+
+endmenu

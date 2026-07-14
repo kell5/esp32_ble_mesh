@@ -12,6 +12,7 @@
 #include <inttypes.h>
 
 #include "esp_log.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 #include "esp_ble_mesh_defs.h"
@@ -32,6 +33,48 @@
 extern struct _led_state led_state[BOARD_LED_COUNT];
 
 static uint8_t dev_uuid[16] = { 0xdd, 0xdd };
+static uint8_t s_node_stage;
+static uint16_t s_node_addr = ESP_BLE_MESH_ADDR_UNASSIGNED;
+static uint8_t s_restored_onoff;
+
+static void farmely_load_node_state(void)
+{
+    nvs_handle_t handle;
+
+    if (nvs_open("farmely_node", NVS_READONLY, &handle) != ESP_OK) {
+        return;
+    }
+    nvs_get_u8(handle, "stage", &s_node_stage);
+    nvs_get_u16(handle, "addr", &s_node_addr);
+    nvs_get_u8(handle, "onoff", &s_restored_onoff);
+    nvs_close(handle);
+}
+
+static void farmely_store_node_state(uint8_t stage, uint16_t addr, uint8_t onoff)
+{
+    nvs_handle_t handle;
+
+    if (stage < s_node_stage) {
+        stage = s_node_stage;
+    }
+    if (!ESP_BLE_MESH_ADDR_IS_UNICAST(addr) &&
+        ESP_BLE_MESH_ADDR_IS_UNICAST(s_node_addr)) {
+        addr = s_node_addr;
+    }
+    s_node_stage = stage;
+    s_node_addr = addr;
+    s_restored_onoff = onoff;
+
+    if (nvs_open("farmely_node", NVS_READWRITE, &handle) != ESP_OK) {
+        return;
+    }
+
+    nvs_set_u8(handle, "stage", stage);
+    nvs_set_u16(handle, "addr", addr);
+    nvs_set_u8(handle, "onoff", onoff);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
 
 static esp_ble_mesh_cfg_srv_t config_server = {
     /* 3 transmissions with 20ms interval */
@@ -59,6 +102,24 @@ static esp_ble_mesh_gen_onoff_srv_t onoff_server_0 = {
         .set_auto_rsp = ESP_BLE_MESH_SERVER_AUTO_RSP,
     },
 };
+
+static void farmely_reset_node_state(void)
+{
+    nvs_handle_t handle;
+
+    s_node_stage = 0;
+    s_node_addr = ESP_BLE_MESH_ADDR_UNASSIGNED;
+    s_restored_onoff = LED_OFF;
+    onoff_server_0.state.onoff = LED_OFF;
+    board_led_operation(LED_G, LED_OFF);
+
+    if (nvs_open("farmely_node", NVS_READWRITE, &handle) != ESP_OK) {
+        return;
+    }
+    nvs_erase_all(handle);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
 
 static esp_ble_mesh_model_t root_models[] = {
     ESP_BLE_MESH_MODEL_CFG_SRV(&config_server),
@@ -176,9 +237,11 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
         ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT");
         prov_complete(param->node_prov_complete.net_idx, param->node_prov_complete.addr,
             param->node_prov_complete.flags, param->node_prov_complete.iv_index);
+        farmely_store_node_state(5, param->node_prov_complete.addr, LED_OFF);
         break;
     case ESP_BLE_MESH_NODE_PROV_RESET_EVT:
         ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_RESET_EVT");
+        farmely_reset_node_state();
         break;
     case ESP_BLE_MESH_NODE_SET_UNPROV_DEV_NAME_COMP_EVT:
         ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_SET_UNPROV_DEV_NAME_COMP_EVT, err_code %d", param->node_set_unprov_dev_name_comp.err_code);
@@ -202,6 +265,8 @@ static void example_ble_mesh_generic_server_cb(esp_ble_mesh_generic_server_cb_ev
             param->ctx.recv_op == ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET_UNACK) {
             ESP_LOGI(TAG, "onoff 0x%02x", param->value.state_change.onoff_set.onoff);
             example_change_led_state(param->model, &param->ctx, param->value.state_change.onoff_set.onoff);
+            farmely_store_node_state(7, esp_ble_mesh_get_primary_element_address(),
+                                     param->value.state_change.onoff_set.onoff);
         }
         break;
     case ESP_BLE_MESH_GENERIC_SERVER_RECV_GET_MSG_EVT:
@@ -249,6 +314,8 @@ static void example_ble_mesh_config_server_cb(esp_ble_mesh_cfg_server_cb_event_t
                 param->value.state_change.mod_app_bind.app_idx,
                 param->value.state_change.mod_app_bind.company_id,
                 param->value.state_change.mod_app_bind.model_id);
+            farmely_store_node_state(6, param->value.state_change.mod_app_bind.element_addr,
+                                     onoff_server_0.state.onoff);
             break;
         case ESP_BLE_MESH_MODEL_OP_MODEL_SUB_ADD:
             ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_OP_MODEL_SUB_ADD");
@@ -286,8 +353,6 @@ static esp_err_t ble_mesh_init(void)
 
     ESP_LOGI(TAG, "BLE Mesh Node initialized");
 
-    board_led_operation(LED_G, LED_ON);
-
     return err;
 }
 
@@ -297,20 +362,26 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Initializing...");
 
-    board_init();
-
     err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+    farmely_load_node_state();
+    onoff_server_0.state.onoff = s_restored_onoff;
+    farmely_store_node_state(1, s_node_addr, s_restored_onoff);
+
+    board_init();
+    board_led_operation(LED_G, s_restored_onoff);
+    farmely_store_node_state(2, s_node_addr, s_restored_onoff);
 
     err = bluetooth_init();
     if (err) {
         ESP_LOGE(TAG, "esp32_bluetooth_init failed (err %d)", err);
         return;
     }
+    farmely_store_node_state(3, s_node_addr, s_restored_onoff);
 
     ble_mesh_get_dev_uuid(dev_uuid);
 
@@ -318,5 +389,9 @@ void app_main(void)
     err = ble_mesh_init();
     if (err) {
         ESP_LOGE(TAG, "Bluetooth mesh init failed (err %d)", err);
+        return;
     }
+    farmely_store_node_state(esp_ble_mesh_node_is_provisioned() ? 5 : 4,
+                             esp_ble_mesh_get_primary_element_address(),
+                             onoff_server_0.state.onoff);
 }
