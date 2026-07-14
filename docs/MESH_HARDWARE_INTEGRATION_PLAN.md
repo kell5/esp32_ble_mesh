@@ -176,5 +176,6 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 N16R8 网关 | Wi-Fi STA + MQTT bridge、normalized/legacy topic、ACK/status 映射 | 代码完成/运行未验收 | 网关固件构建成功，`provisioner.bin` 824896 bytes、app 分区剩余 46%，并已刷入 COM4；当前配置未写入 Wi-Fi/MQTT 凭据，因此不能标记联网、云端闭环或共存压力通过 |
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM6 WROOM | 串口识别、构建、刷写、Provisioning、配置和重启恢复 | 部分通过 | esptool 识别 ESP32-D0WD-V3 rev 3.1、4 MB Flash；WROOM 固件 811424 bytes、app 分区剩余 47%；已配网为地址 `0x0006`，重启后保持 `farmely_node:stage=7, addr=6, onoff=1`。尚待人工确认 GPIO2/D2 实灯状态 |
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8/COM6 双节点 | 双节点记录与网关重启恢复 | 部分通过 | 网关 NVS 同时包含 `pn/0005`、`pn/0006` 和持久化 `nodes`；重启查询后达到 `farmely_mesh:stage=9, addr=6, onoff=1`。已证明两个节点地址不重复，分组地址和 50 次定向无误控尚未测试 |
+| 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + 已保存双节点 | `0xC000` 组订阅、group multicast、20 轮分组/50 条定向自测 | 未通过 | 默认和自测固件均构建通过，app 分区剩余 46%；启动日志曾确认 `0x0005`、`0x0006` 订阅 `0xC000`。正式自测时 `0x0005` 离线，分组 `0/20`、定向 `25/50`，其中在线 `0x0006` 的 25 条定向命令均成功。需恢复 `0x0005` 在线后重测，不能记录为分组或 50 条无误控通过 |
 
 每轮联调结束后更新本表，并在 `docs/DEVELOPMENT_PROGRESS.md` 中只写已经有证据的结论。

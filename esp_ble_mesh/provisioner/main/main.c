@@ -44,6 +44,8 @@
 
 #define APP_KEY_IDX         0x0000
 #define APP_KEY_OCTET       0x12
+#define FARMELY_GROUP_ADDR  0xC000
+#define FARMELY_MAX_RETRIES 3
 
 static uint8_t dev_uuid[16];
 static uint8_t s_tid;
@@ -74,10 +76,14 @@ static uint8_t s_progress_stage;
 typedef struct {
     bool in_flight;
     uint8_t desired_onoff;
+    uint8_t retries;
     char message_id[96];
 } farmely_pending_command_t;
 
 static farmely_pending_command_t s_pending[CONFIG_BLE_MESH_MAX_PROV_NODES];
+static uint8_t s_get_retries[CONFIG_BLE_MESH_MAX_PROV_NODES];
+static uint8_t s_config_retries[CONFIG_BLE_MESH_MAX_PROV_NODES];
+static uint32_t s_status_version[CONFIG_BLE_MESH_MAX_PROV_NODES];
 
 static void farmely_store_progress(uint8_t stage, uint16_t addr, uint8_t onoff, int32_t error)
 {
@@ -280,31 +286,194 @@ static esp_err_t farmely_send_get(esp_ble_mesh_node_info_t *node)
     return esp_ble_mesh_generic_client_get_state(&common, &get_state);
 }
 
-static esp_err_t farmely_send_onoff(esp_ble_mesh_node_info_t *node, bool on,
-                                    const char *message_id)
+static esp_err_t farmely_start_get(esp_ble_mesh_node_info_t *node)
 {
-    esp_ble_mesh_client_common_param_t common = {0};
-    esp_ble_mesh_generic_client_set_state_t set_state = {0};
     size_t index = node - nodes;
 
     if (index >= ARRAY_SIZE(nodes)) {
         return ESP_ERR_INVALID_ARG;
     }
+    s_get_retries[index] = 0;
+    return farmely_send_get(node);
+}
+
+static void farmely_reset_config_retries(esp_ble_mesh_node_info_t *node)
+{
+    size_t index = node - nodes;
+
+    if (index < ARRAY_SIZE(s_config_retries)) {
+        s_config_retries[index] = 0;
+    }
+}
+
+static bool farmely_take_config_retry(esp_ble_mesh_node_info_t *node,
+                                      const char *operation)
+{
+    size_t index = node - nodes;
+
+    if (index >= ARRAY_SIZE(s_config_retries)) {
+        return false;
+    }
+    if (s_config_retries[index] >= FARMELY_MAX_RETRIES) {
+        ESP_LOGE(TAG, "%s timed out for 0x%04x", operation, node->unicast);
+        s_config_retries[index] = 0;
+        return false;
+    }
+    s_config_retries[index]++;
+    return true;
+}
+
+static esp_err_t farmely_send_group_subscription(
+    esp_ble_mesh_node_info_t *node)
+{
+    esp_ble_mesh_client_common_param_t common = {0};
+    esp_ble_mesh_cfg_client_set_state_t set_state = {0};
+
+    example_ble_mesh_set_msg_common(
+        &common, node, config_client.model,
+        ESP_BLE_MESH_MODEL_OP_MODEL_SUB_ADD);
+    set_state.model_sub_add.element_addr = node->unicast;
+    set_state.model_sub_add.sub_addr = FARMELY_GROUP_ADDR;
+    set_state.model_sub_add.model_id =
+        ESP_BLE_MESH_MODEL_ID_GEN_ONOFF_SRV;
+    set_state.model_sub_add.company_id = ESP_BLE_MESH_CID_NVAL;
+    return esp_ble_mesh_config_client_set_state(&common, &set_state);
+}
+
+static esp_err_t farmely_start_group_subscription(
+    esp_ble_mesh_node_info_t *node)
+{
+    size_t index = node - nodes;
+
+    if (index >= ARRAY_SIZE(nodes)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    farmely_reset_config_retries(node);
+    return farmely_send_group_subscription(node);
+}
+
+static void farmely_clear_pending(size_t index)
+{
+    if (index < ARRAY_SIZE(s_pending)) {
+        memset(&s_pending[index], 0, sizeof(s_pending[index]));
+    }
+}
+
+static void farmely_clear_all_pending(void)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(s_pending); i++) {
+        farmely_clear_pending(i);
+    }
+}
+
+static esp_err_t farmely_send_onoff_request(esp_ble_mesh_node_info_t *node,
+                                            bool on)
+{
+    esp_ble_mesh_client_common_param_t common = {0};
+    esp_ble_mesh_generic_client_set_state_t set_state = {0};
 
     example_ble_mesh_set_msg_common(&common, node, onoff_client.model,
                                     ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET);
     set_state.onoff_set.op_en = false;
     set_state.onoff_set.onoff = on;
     set_state.onoff_set.tid = s_tid++;
+    return esp_ble_mesh_generic_client_set_state(&common, &set_state);
+}
+
+static esp_err_t farmely_send_onoff(esp_ble_mesh_node_info_t *node, bool on,
+                                    const char *message_id)
+{
+    size_t index = node - nodes;
+
+    if (index >= ARRAY_SIZE(nodes)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_pending[index].in_flight) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
     s_pending[index].in_flight = true;
     s_pending[index].desired_onoff = on;
     strlcpy(s_pending[index].message_id, message_id ? message_id : "",
             sizeof(s_pending[index].message_id));
 
+    esp_err_t err = farmely_send_onoff_request(node, on);
+    if (err != ESP_OK) {
+        farmely_clear_pending(index);
+    }
+    return err;
+}
+
+static void farmely_group_sync_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
+        if (!s_pending[i].in_flight ||
+            !ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) {
+            continue;
+        }
+        if (farmely_send_get(&nodes[i]) != ESP_OK) {
+            farmely_clear_pending(i);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    vTaskDelete(NULL);
+}
+
+static esp_err_t farmely_send_group_onoff(bool on, const char *message_id)
+{
+    esp_ble_mesh_client_common_param_t common = {0};
+    esp_ble_mesh_generic_client_set_state_t set_state = {0};
+    size_t node_count = 0;
+
+    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
+        if (!ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) {
+            continue;
+        }
+        if (s_pending[i].in_flight) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        node_count++;
+    }
+    if (node_count == 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
+        if (!ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) {
+            continue;
+        }
+        s_pending[i].in_flight = true;
+        s_pending[i].desired_onoff = on;
+        strlcpy(s_pending[i].message_id, message_id ? message_id : "",
+                sizeof(s_pending[i].message_id));
+    }
+
+    common.opcode = ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET_UNACK;
+    common.model = onoff_client.model;
+    common.ctx.net_idx = prov_key.net_idx;
+    common.ctx.app_idx = prov_key.app_idx;
+    common.ctx.addr = FARMELY_GROUP_ADDR;
+    common.ctx.send_ttl = MSG_SEND_TTL;
+    common.msg_timeout = MSG_TIMEOUT;
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 2, 0)
+    common.msg_role = MSG_ROLE;
+#endif
+    set_state.onoff_set.op_en = false;
+    set_state.onoff_set.onoff = on;
+    set_state.onoff_set.tid = s_tid++;
+
+    if (xTaskCreate(farmely_group_sync_task, "mesh_group_sync", 3072,
+                    NULL, 5, NULL) != pdPASS) {
+        farmely_clear_all_pending();
+        return ESP_ERR_NO_MEM;
+    }
+
     esp_err_t err = esp_ble_mesh_generic_client_set_state(&common, &set_state);
     if (err != ESP_OK) {
-        memset(&s_pending[index], 0, sizeof(s_pending[index]));
+        farmely_clear_all_pending();
     }
     return err;
 }
@@ -313,8 +482,10 @@ static esp_err_t farmely_bridge_command(const char *device_id, bool on,
                                         const char *message_id, void *ctx)
 {
     (void)ctx;
-    bool matched = false;
-    esp_err_t result = ESP_ERR_NOT_FOUND;
+
+    if (!strcmp(device_id, "*")) {
+        return farmely_send_group_onoff(on, message_id);
+    }
 
     for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
         if (!ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) {
@@ -322,19 +493,13 @@ static esp_err_t farmely_bridge_command(const char *device_id, bool on,
         }
         char current_id[32];
         farmely_node_device_id(&nodes[i], current_id, sizeof(current_id));
-        if (strcmp(device_id, "*") && strcmp(device_id, current_id)) {
+        if (strcmp(device_id, current_id)) {
             continue;
         }
-        matched = true;
-        esp_err_t err = farmely_send_onoff(&nodes[i], on, message_id);
-        if (err == ESP_OK) {
-            result = ESP_OK;
-        } else if (result != ESP_OK) {
-            result = err;
-        }
+        return farmely_send_onoff(&nodes[i], on, message_id);
     }
 
-    return matched ? result : ESP_ERR_NOT_FOUND;
+    return ESP_ERR_NOT_FOUND;
 }
 
 static void farmely_bridge_sync(void *ctx)
@@ -347,7 +512,7 @@ static void farmely_bridge_sync(void *ctx)
             continue;
         }
         node_count++;
-        farmely_send_get(&nodes[i]);
+        farmely_start_get(&nodes[i]);
     }
     farmely_gateway_bridge_publish_gateway_status(node_count);
 }
@@ -358,11 +523,137 @@ static void farmely_recover_nodes_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(3000));
     for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
         if (ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) {
-            farmely_send_get(&nodes[i]);
+            if (farmely_start_group_subscription(&nodes[i]) != ESP_OK) {
+                farmely_start_get(&nodes[i]);
+            }
+            vTaskDelay(pdMS_TO_TICKS(250));
         }
     }
     vTaskDelete(NULL);
 }
+
+#if CONFIG_FARMELY_BENCH_SELF_TEST
+static bool farmely_wait_status_update(size_t index, uint32_t version,
+                                       TickType_t timeout)
+{
+    TickType_t start = xTaskGetTickCount();
+
+    while (s_status_version[index] == version) {
+        if (xTaskGetTickCount() - start >= timeout) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return true;
+}
+
+static bool farmely_wait_pending_clear(size_t index, TickType_t timeout)
+{
+    TickType_t start = xTaskGetTickCount();
+
+    while (s_pending[index].in_flight) {
+        if (xTaskGetTickCount() - start >= timeout) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return true;
+}
+
+static void farmely_bench_self_test_task(void *arg)
+{
+    (void)arg;
+    size_t active[CONFIG_BLE_MESH_MAX_PROV_NODES];
+    bool initial_onoff[CONFIG_BLE_MESH_MAX_PROV_NODES];
+    size_t active_count = 0;
+    unsigned group_passed = 0;
+    unsigned directed_passed = 0;
+
+    vTaskDelay(pdMS_TO_TICKS(7000));
+    for (size_t i = 0; i < ARRAY_SIZE(nodes); i++) {
+        if (!ESP_BLE_MESH_ADDR_IS_UNICAST(nodes[i].unicast)) {
+            continue;
+        }
+        uint32_t version = s_status_version[i];
+        if (farmely_start_get(&nodes[i]) == ESP_OK &&
+            farmely_wait_status_update(i, version, pdMS_TO_TICKS(3000))) {
+            initial_onoff[active_count] = nodes[i].onoff;
+            active[active_count++] = i;
+        }
+    }
+    if (active_count < 2) {
+        ESP_LOGE(TAG, "Bench self-test requires at least two online nodes");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    for (unsigned round = 0; round < 20; round++) {
+        bool desired = (round & 1U) != 0;
+        bool passed = farmely_send_group_onoff(desired, NULL) == ESP_OK;
+
+        for (size_t i = 0; i < active_count; i++) {
+            size_t index = active[i];
+            passed = farmely_wait_pending_clear(
+                         index, pdMS_TO_TICKS(5000)) &&
+                     nodes[index].onoff == desired && passed;
+        }
+        if (passed) {
+            group_passed++;
+        } else {
+            ESP_LOGE(TAG, "Bench group round %u failed", round + 1);
+        }
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
+    for (unsigned command = 0; command < 50; command++) {
+        size_t target_pos = command % active_count;
+        size_t target = active[target_pos];
+        bool previous[CONFIG_BLE_MESH_MAX_PROV_NODES] = {0};
+        bool desired = !nodes[target].onoff;
+        bool passed;
+
+        for (size_t i = 0; i < active_count; i++) {
+            previous[i] = nodes[active[i]].onoff;
+        }
+        passed = farmely_send_onoff(&nodes[target], desired, NULL) == ESP_OK &&
+                 farmely_wait_pending_clear(target, pdMS_TO_TICKS(3000)) &&
+                 nodes[target].onoff == desired;
+        for (size_t i = 0; i < active_count; i++) {
+            if (i == target_pos) {
+                continue;
+            }
+            size_t index = active[i];
+            uint32_t version = s_status_version[index];
+            if (farmely_start_get(&nodes[index]) != ESP_OK ||
+                !farmely_wait_status_update(
+                    index, version, pdMS_TO_TICKS(3000)) ||
+                nodes[index].onoff != previous[i]) {
+                passed = false;
+            }
+        }
+        if (passed) {
+            directed_passed++;
+        } else {
+            ESP_LOGE(TAG, "Bench directed command %u failed for 0x%04x",
+                     command + 1, nodes[target].unicast);
+        }
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
+    ESP_LOGI(TAG,
+             "Bench self-test complete: group=%u/20 directed=%u/50",
+             group_passed, directed_passed);
+    for (size_t i = 0; i < active_count; i++) {
+        size_t index = active[i];
+        if (nodes[index].onoff != initial_onoff[i] &&
+            farmely_send_onoff(&nodes[index], initial_onoff[i], NULL) ==
+                ESP_OK) {
+            farmely_wait_pending_clear(index, pdMS_TO_TICKS(3000));
+        }
+    }
+    vTaskDelete(NULL);
+}
+#endif
 
 static esp_err_t prov_complete(int node_idx, const esp_ble_mesh_octet16_t uuid,
                                uint16_t unicast, uint8_t elem_num, uint16_t net_idx)
@@ -555,6 +846,7 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
     case ESP_BLE_MESH_CFG_CLIENT_GET_STATE_EVT:
         switch (opcode) {
         case ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_GET: {
+            farmely_reset_config_retries(node);
             farmely_store_progress(FARMELY_STAGE_COMPOSITION_RECEIVED,
                                    addr, node->onoff, ESP_OK);
             ESP_LOGI(TAG, "composition data %s", bt_hex(param->status_cb.comp_data_status.composition_data->data,
@@ -578,6 +870,15 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
     case ESP_BLE_MESH_CFG_CLIENT_SET_STATE_EVT:
         switch (opcode) {
         case ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD: {
+            if (param->status_cb.appkey_status.status) {
+                ESP_LOGE(TAG, "AppKey Add status 0x%02x",
+                         param->status_cb.appkey_status.status);
+                farmely_store_progress(
+                    s_progress_stage, addr, node->onoff,
+                    param->status_cb.appkey_status.status);
+                break;
+            }
+            farmely_reset_config_retries(node);
             farmely_store_progress(FARMELY_STAGE_APP_KEY_ADDED,
                                    addr, node->onoff, ESP_OK);
             esp_ble_mesh_cfg_client_set_state_t set_state = {0};
@@ -594,16 +895,44 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
             break;
         }
         case ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND: {
+            if (param->status_cb.model_app_status.status) {
+                ESP_LOGE(TAG, "Model App Bind status 0x%02x",
+                         param->status_cb.model_app_status.status);
+                farmely_store_progress(
+                    s_progress_stage, addr, node->onoff,
+                    param->status_cb.model_app_status.status);
+                break;
+            }
+            farmely_reset_config_retries(node);
             farmely_store_progress(FARMELY_STAGE_MODEL_BOUND,
                                    addr, node->onoff, ESP_OK);
             s_toggle_after_get_addr = node->unicast;
-            err = farmely_send_get(node);
+            err = farmely_start_group_subscription(node);
+            if (err) {
+                ESP_LOGE(TAG, "%s: Config Model Subscription Add failed",
+                         __func__);
+                return;
+            }
+            break;
+        }
+        case ESP_BLE_MESH_MODEL_OP_MODEL_SUB_ADD:
+            if (param->status_cb.model_sub_status.status) {
+                ESP_LOGE(TAG, "Model Subscription Add status 0x%02x",
+                         param->status_cb.model_sub_status.status);
+                farmely_store_progress(
+                    s_progress_stage, addr, node->onoff,
+                    param->status_cb.model_sub_status.status);
+                break;
+            }
+            farmely_reset_config_retries(node);
+            ESP_LOGI(TAG, "Node 0x%04x subscribed to group 0x%04x",
+                     node->unicast, FARMELY_GROUP_ADDR);
+            err = farmely_start_get(node);
             if (err) {
                 ESP_LOGE(TAG, "%s: Generic OnOff Get failed", __func__);
                 return;
             }
             break;
-        }
         default:
             break;
         }
@@ -623,6 +952,9 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
     case ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT:
         switch (opcode) {
         case ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_GET: {
+            if (!farmely_take_config_retry(node, "Composition Data Get")) {
+                break;
+            }
             esp_ble_mesh_cfg_client_get_state_t get_state = {0};
             example_ble_mesh_set_msg_common(&common, node, config_client.model, ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_GET);
             get_state.comp_data_get.page = COMP_DATA_PAGE_0;
@@ -634,6 +966,9 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
             break;
         }
         case ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD: {
+            if (!farmely_take_config_retry(node, "AppKey Add")) {
+                break;
+            }
             esp_ble_mesh_cfg_client_set_state_t set_state = {0};
             example_ble_mesh_set_msg_common(&common, node, config_client.model, ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD);
             set_state.app_key_add.net_idx = prov_key.net_idx;
@@ -647,6 +982,9 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
             break;
         }
         case ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND: {
+            if (!farmely_take_config_retry(node, "Model App Bind")) {
+                break;
+            }
             esp_ble_mesh_cfg_client_set_state_t set_state = {0};
             example_ble_mesh_set_msg_common(&common, node, config_client.model, ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND);
             set_state.model_app_bind.element_addr = node->unicast;
@@ -656,6 +994,19 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
             err = esp_ble_mesh_config_client_set_state(&common, &set_state);
             if (err) {
                 ESP_LOGE(TAG, "%s: Config Model App Bind failed", __func__);
+                return;
+            }
+            break;
+        }
+        case ESP_BLE_MESH_MODEL_OP_MODEL_SUB_ADD: {
+            if (!farmely_take_config_retry(
+                    node, "Model Subscription Add")) {
+                break;
+            }
+            err = farmely_send_group_subscription(node);
+            if (err) {
+                ESP_LOGE(TAG, "%s: Config Model Subscription Add failed",
+                         __func__);
                 return;
             }
             break;
@@ -684,9 +1035,24 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
     ESP_LOGI(TAG, "%s, error_code = 0x%02x, event = 0x%02x, addr: 0x%04x, opcode: 0x%04" PRIx32,
              __func__, param->error_code, event, param->params->ctx.addr, opcode);
 
+    if (opcode == ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET_UNACK &&
+        addr == FARMELY_GROUP_ADDR) {
+        if (param->error_code) {
+            ESP_LOGE(TAG, "Group Generic OnOff Set failed, error 0x%02x",
+                     param->error_code);
+        }
+        return;
+    }
+
     node = example_ble_mesh_get_node_info(addr);
     if (param->error_code) {
         ESP_LOGE(TAG, "Send generic client message failed, opcode 0x%04" PRIx32, opcode);
+        if (node) {
+            size_t index = node - nodes;
+            if (index < ARRAY_SIZE(s_pending)) {
+                farmely_clear_pending(index);
+            }
+        }
         farmely_store_progress(s_progress_stage, addr, node ? node->onoff : LED_OFF,
                                param->error_code);
         return;
@@ -702,6 +1068,11 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
         switch (opcode) {
         case ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_GET: {
             node->onoff = param->status_cb.onoff_status.present_onoff;
+            size_t index = node - nodes;
+            if (index < ARRAY_SIZE(s_status_version)) {
+                s_status_version[index]++;
+                s_get_retries[index] = 0;
+            }
             farmely_store_nodes();
             farmely_store_progress(
                 s_toggle_after_get_addr == addr ? FARMELY_STAGE_ONOFF_RECEIVED
@@ -712,6 +1083,20 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
             farmely_node_device_id(node, device_id, sizeof(device_id));
             farmely_gateway_bridge_publish_node_status(
                 device_id, node->onoff == LED_ON, true);
+            if (index < ARRAY_SIZE(s_pending) && s_pending[index].in_flight) {
+                if (s_pending[index].desired_onoff == node->onoff) {
+                    farmely_gateway_bridge_publish_ack(
+                        device_id, s_pending[index].message_id);
+                    farmely_clear_pending(index);
+                } else {
+                    s_pending[index].retries = 0;
+                    err = farmely_send_onoff_request(
+                        node, s_pending[index].desired_onoff);
+                    if (err) {
+                        farmely_clear_pending(index);
+                    }
+                }
+            }
             if (s_toggle_after_get_addr == addr) {
                 s_toggle_after_get_addr = ESP_BLE_MESH_ADDR_UNASSIGNED;
                 err = farmely_send_onoff(node, !node->onoff, NULL);
@@ -730,20 +1115,38 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
         switch (opcode) {
         case ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET: {
             node->onoff = param->status_cb.onoff_status.present_onoff;
+            size_t index = node - nodes;
+            if (index < ARRAY_SIZE(s_status_version)) {
+                s_status_version[index]++;
+            }
             farmely_store_nodes();
             farmely_store_progress(FARMELY_STAGE_ONOFF_SET,
                                    addr, node->onoff, ESP_OK);
             ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET onoff: 0x%02x", node->onoff);
-            size_t index = node - nodes;
             char device_id[32];
             farmely_node_device_id(node, device_id, sizeof(device_id));
             farmely_gateway_bridge_publish_node_status(
                 device_id, node->onoff == LED_ON, true);
-            if (index < ARRAY_SIZE(s_pending) && s_pending[index].in_flight &&
-                s_pending[index].desired_onoff == node->onoff) {
-                farmely_gateway_bridge_publish_ack(
-                    device_id, s_pending[index].message_id);
-                memset(&s_pending[index], 0, sizeof(s_pending[index]));
+            if (index < ARRAY_SIZE(s_pending) &&
+                s_pending[index].in_flight) {
+                if (s_pending[index].desired_onoff == node->onoff) {
+                    farmely_gateway_bridge_publish_ack(
+                        device_id, s_pending[index].message_id);
+                    farmely_clear_pending(index);
+                } else if (s_pending[index].retries >=
+                           FARMELY_MAX_RETRIES) {
+                    ESP_LOGE(TAG,
+                             "Generic OnOff Set status mismatch for 0x%04x",
+                             node->unicast);
+                    farmely_clear_pending(index);
+                } else {
+                    s_pending[index].retries++;
+                    err = farmely_send_onoff_request(
+                        node, s_pending[index].desired_onoff);
+                    if (err) {
+                        farmely_clear_pending(index);
+                    }
+                }
             }
             break;
         }
@@ -757,8 +1160,30 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
         /* If failed to receive the responses, these messages will be resend */
         switch (opcode) {
         case ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_GET: {
+            size_t index = node - nodes;
+            if (index < ARRAY_SIZE(s_pending) && s_pending[index].in_flight) {
+                if (s_pending[index].retries >= FARMELY_MAX_RETRIES) {
+                    ESP_LOGE(TAG, "Group status verification timed out for 0x%04x",
+                             node->unicast);
+                    farmely_clear_pending(index);
+                    break;
+                }
+                s_pending[index].retries++;
+            } else if (index < ARRAY_SIZE(s_get_retries)) {
+                if (s_get_retries[index] >= FARMELY_MAX_RETRIES) {
+                    ESP_LOGE(TAG, "Generic OnOff Get timed out for 0x%04x",
+                             node->unicast);
+                    s_get_retries[index] = 0;
+                    break;
+                }
+                s_get_retries[index]++;
+            }
             err = farmely_send_get(node);
             if (err) {
+                if (index < ARRAY_SIZE(s_pending) &&
+                    s_pending[index].in_flight) {
+                    farmely_clear_pending(index);
+                }
                 ESP_LOGE(TAG, "%s: Generic OnOff Get failed", __func__);
                 return;
             }
@@ -769,10 +1194,18 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
             if (index >= ARRAY_SIZE(s_pending) || !s_pending[index].in_flight) {
                 break;
             }
-            err = farmely_send_onoff(node, s_pending[index].desired_onoff,
-                                     s_pending[index].message_id);
+            if (s_pending[index].retries >= FARMELY_MAX_RETRIES) {
+                ESP_LOGE(TAG, "Generic OnOff Set timed out for 0x%04x",
+                         node->unicast);
+                farmely_clear_pending(index);
+                break;
+            }
+            s_pending[index].retries++;
+            err = farmely_send_onoff_request(
+                node, s_pending[index].desired_onoff);
             if (err) {
-                ESP_LOGE(TAG, "%s: Generic OnOff Set failed", __func__);
+                farmely_clear_pending(index);
+                ESP_LOGE(TAG, "%s: Generic OnOff Set retry failed", __func__);
                 return;
             }
             break;
@@ -865,6 +1298,14 @@ void app_main(void)
              dev_uuid[5], dev_uuid[6], dev_uuid[7]);
     farmely_gateway_bridge_start(gateway_id, farmely_bridge_command,
                                  farmely_bridge_sync, NULL);
-    xTaskCreate(farmely_recover_nodes_task, "mesh_recover", 3072,
-                NULL, 5, NULL);
+    if (xTaskCreate(farmely_recover_nodes_task, "mesh_recover", 3072,
+                    NULL, 5, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "Unable to start Mesh recovery task");
+    }
+#if CONFIG_FARMELY_BENCH_SELF_TEST
+    if (xTaskCreate(farmely_bench_self_test_task, "mesh_bench_test", 4096,
+                    NULL, 5, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "Unable to start Mesh bench self-test");
+    }
+#endif
 }

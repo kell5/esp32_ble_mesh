@@ -20,4 +20,12 @@ config FARMELY_MQTT_PASSWORD
     string "MQTT password"
     default ""
 
+config FARMELY_BENCH_SELF_TEST
+    bool "Run BLE Mesh group and directed-control bench test"
+    default n
+    help
+        Runs 20 group OnOff rounds followed by 50 directed OnOff commands
+        after confirming at least two saved nodes are online. Enable only
+        for an attended hardware bench test.
+
 endmenu
