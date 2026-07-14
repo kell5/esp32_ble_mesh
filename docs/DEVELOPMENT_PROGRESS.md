@@ -26,10 +26,11 @@
 - 节点已写入“恢复已保存 OnOff 与配网阶段”的本地修改；S3 固件 836224 bytes、WROOM 固件 811424 bytes，app 分区分别剩余 46% 和 47%。
 - COM8 已刷入最新 S3 节点固件，重启后保持地址 `0x0005`、已配网状态和 `onoff=0`。
 - COM6 已由 esptool 确认为 ESP32-D0WD-V3 rev 3.1、4 MB Flash，并刷成 GPIO2/D2 的第二个 BLE Mesh Generic OnOff Server；已配网为地址 `0x0006`，重启后保持 `stage=7/onoff=1`。
-- COM4 重启恢复后 NVS 同时保存节点 `0x0005`、`0x0006`，并查询到 `addr=6/onoff=1/stage=9`；分组地址和 50 次定向无误控仍未测试。
+- COM4 重启恢复后 NVS 同时保存节点 `0x0005`、`0x0006`，并查询到 `addr=6/onoff=1/stage=9`。
 - Provisioner 已增加固定组地址 `0xC000`：新节点完成 Model App Bind 后自动执行 Model Subscription Add，已保存节点在网关重启后也会补配；广播 MQTT 命令改为一次 BLE Mesh group multicast，再逐节点 Get 校验状态。单节点命令增加 in-flight 保护和有限重试。
 - 默认固件和启用 `CONFIG_FARMELY_BENCH_SELF_TEST` 的测试固件均构建通过；默认 `provisioner.bin` 约 827 KB，app 分区剩余 46%。测试固件提供 20 轮分组和 50 条定向命令的台架检查，默认关闭。
 - COM4 启动日志曾确认 `0x0005`、`0x0006` 均成功订阅 `0xC000`。随后执行台架测试时 `0x0005` 已离线，结果为分组 `0/20`、定向 `25/50`（在线的 `0x0006` 为 `25/25`）；因此双节点分组和 50 次无误控仍不能标记通过。测试后已恢复默认关闭自测的固件。
+- COM8/`0x0005` 恢复在线后重新执行真实双节点台架测试，结果为 `group=20/20 directed=50/50`，没有分组、定向或双节点在线预检失败日志；测试结束后逻辑状态恢复为 `0x0005=0`、`0x0006=1`。COM4 已重新刷回默认关闭自测的生产固件，冷启动后两个节点均重新订阅 `0xC000` 并返回 OnOff 状态。物理 WS2812/GPIO2 灯态仍需人工确认。
 
 ## 1. 产品目标
 
@@ -166,7 +167,8 @@ Flutter App
 - [x] COM14、COM15 记录为非活动异常端口，不再继续消耗主线联调时间。
 - [x] COM6 WROOM 已完成构建、刷写、配网和 NVS 重启恢复。
 - [x] 网关已实现 `0xC000` Model Subscription Add、group multicast、状态复查和可选台架自测。
-- [ ] COM6 仍需人工确认 GPIO2/D2 实灯恢复；确保 COM8/`0x0005` 在线后重新完成 20 轮分组和 50 次定向无误控测试。
+- [x] COM8/`0x0005` 与 COM6/`0x0006` 已完成 20 轮分组和 50 次定向无误控测试，结果 `20/20`、`50/50`。
+- [ ] COM8 WS2812 与 COM6 GPIO2/D2 的物理灯态仍需人工确认。
 - [ ] N16R8 BLE Mesh + Wi-Fi/MQTT 网关实现与共存压力验证。
 
 详细步骤、判定阈值和结果记录见 [MESH_HARDWARE_INTEGRATION_PLAN.md](MESH_HARDWARE_INTEGRATION_PLAN.md)。
@@ -334,11 +336,11 @@ Flutter App
 10. 窗帘、阀门、门锁等目前只复用 on/off 协议和板载 LED 指示，尚未实现真实电机、限位、继电器与安全保护。
 11. BLE Mesh 与 Wi-Fi 可在同一 ESP32-S3 网关共存，但共用 2.4 GHz 射频；未经 30 分钟并行和命令压力测试不得标记为稳定。
 12. COM14、COM15 仅保留历史异常记录，不再作为活动端口；不得把串口问题写成 BLE Mesh 失败。
-13. 网关 NVS 保存两个灯节点，但最近一次台架测试只有 `0x0006` 在线；不得把单节点结果写成双节点分组通过。
+13. 先前台架测试只有 `0x0006` 在线，结果 `0/20`、`25/50`；COM8 恢复后双节点重测已达到 `20/20`、`50/50`。该结果只证明 Mesh 逻辑状态，不替代物理灯态观察。
 
 ## 10. 下一步优先级
 
-1. 重新接通并确认 COM8/`0x0005` 在线，人工确认 COM6 重启后 GPIO2/D2 仍亮；启用本地 `CONFIG_FARMELY_BENCH_SELF_TEST`，完成 20 轮双节点分组和 50 次单设备命令不误控后立即恢复默认关闭配置。
+1. 人工确认 COM8 WS2812 与 COM6 GPIO2/D2 的物理灯态和测试后恢复状态。
 2. 为 COM4 的本地 `sdkconfig` 配置 Wi-Fi/MQTT（不提交凭据），验证 MQTT→BLE→OnOff Status→ACK/reported state 闭环。
 3. 在 MQTT/BLE 命令链路中复验 COM8 的 On 状态重启恢复，确保 GPIO48、Model state 和 NVS 状态一致。
 4. 完成 Wi-Fi 重连、节点重启、网关重启和 BLE/Wi-Fi 30 分钟共存测试。
