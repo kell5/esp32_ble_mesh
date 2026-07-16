@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -17,7 +18,10 @@ from .models import (
     AutomationTrigger,
     DeviceEventResponse,
     DeviceResponse,
+    FirmwareResponse,
     GroupResponse,
+    OtaUpdateRecord,
+    RolloutResponse,
     RoomResponse,
     SceneAction,
     SceneResponse,
@@ -63,6 +67,18 @@ class SceneNotFoundError(LookupError):
 
 
 class AutomationNotFoundError(LookupError):
+    pass
+
+
+class FirmwareNotFoundError(LookupError):
+    pass
+
+
+class RolloutNotFoundError(LookupError):
+    pass
+
+
+class OtaUpdateNotFoundError(LookupError):
     pass
 
 
@@ -256,6 +272,52 @@ class DeviceStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_account_tokens_user
                     ON account_tokens(user_id);
+
+                CREATE TABLE IF NOT EXISTS firmware (
+                    firmware_id TEXT PRIMARY KEY,
+                    product_id TEXT NOT NULL,
+                    hw_version TEXT NOT NULL,
+                    fw_version TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    sign TEXT,
+                    notes TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(product_id, hw_version, fw_version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_firmware_target
+                    ON firmware(product_id, hw_version, fw_version);
+
+                CREATE TABLE IF NOT EXISTS rollouts (
+                    rollout_id TEXT PRIMARY KEY,
+                    product_id TEXT NOT NULL,
+                    hw_version TEXT NOT NULL,
+                    target_fw_version TEXT NOT NULL,
+                    from_fw_version TEXT,
+                    percent INTEGER NOT NULL DEFAULT 100,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_rollouts_match
+                    ON rollouts(product_id, hw_version);
+
+                CREATE TABLE IF NOT EXISTS ota_updates (
+                    update_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+                    firmware_id TEXT REFERENCES firmware(firmware_id) ON DELETE SET NULL,
+                    product_id TEXT NOT NULL,
+                    hw_version TEXT NOT NULL,
+                    target_fw_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    message_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(device_id, firmware_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_ota_updates_device
+                    ON ota_updates(device_id, update_id);
                 """
             )
             columns = {
@@ -939,6 +1001,299 @@ class DeviceStore:
                 self._get_automation(connection, str(row["automation_id"])) for row in rows
             ]
 
+    # --- ota ---------------------------------------------------------------
+
+    def register_firmware(
+        self,
+        product_id: str,
+        hw_version: str,
+        fw_version: str,
+        url: str,
+        sha256: str,
+        sign: str | None = None,
+        notes: str | None = None,
+    ) -> FirmwareResponse:
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT firmware_id FROM firmware
+                WHERE product_id = ? AND hw_version = ? AND fw_version = ?
+                """,
+                (product_id, hw_version, fw_version),
+            ).fetchone()
+            if row is None:
+                firmware_id = _new_id("fw")
+                connection.execute(
+                    """
+                    INSERT INTO firmware(
+                        firmware_id, product_id, hw_version, fw_version, url, sha256,
+                        sign, notes, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        firmware_id, product_id, hw_version, fw_version, url, sha256,
+                        sign, notes, now, now,
+                    ),
+                )
+            else:
+                firmware_id = str(row["firmware_id"])
+                connection.execute(
+                    """
+                    UPDATE firmware
+                    SET url = ?, sha256 = ?, sign = ?, notes = ?, updated_at = ?
+                    WHERE firmware_id = ?
+                    """,
+                    (url, sha256, sign, notes, now, firmware_id),
+                )
+            return self._get_firmware(connection, firmware_id)
+
+    def list_firmware(self, product_id: str | None = None) -> list[FirmwareResponse]:
+        with self._connection() as connection:
+            if product_id is None:
+                rows = connection.execute(
+                    "SELECT * FROM firmware ORDER BY created_at, firmware_id"
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM firmware WHERE product_id = ? "
+                    "ORDER BY created_at, firmware_id",
+                    (product_id,),
+                ).fetchall()
+            return [self._firmware_from_row(row) for row in rows]
+
+    def get_firmware(self, firmware_id: str) -> FirmwareResponse:
+        with self._connection() as connection:
+            return self._get_firmware(connection, firmware_id)
+
+    def delete_firmware(self, firmware_id: str) -> None:
+        with self._connection() as connection:
+            self._require_firmware(connection, firmware_id)
+            connection.execute(
+                "DELETE FROM firmware WHERE firmware_id = ?", (firmware_id,)
+            )
+
+    def create_rollout(
+        self,
+        product_id: str,
+        hw_version: str,
+        target_fw_version: str,
+        from_fw_version: str | None,
+        percent: int,
+        enabled: bool,
+    ) -> RolloutResponse:
+        now = _utc_now().isoformat()
+        rollout_id = _new_id("rollout")
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO rollouts(
+                    rollout_id, product_id, hw_version, target_fw_version,
+                    from_fw_version, percent, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rollout_id, product_id, hw_version, target_fw_version,
+                    from_fw_version, percent, 1 if enabled else 0, now, now,
+                ),
+            )
+            return self._get_rollout(connection, rollout_id)
+
+    def list_rollouts(self) -> list[RolloutResponse]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT rollout_id FROM rollouts ORDER BY created_at, rollout_id"
+            ).fetchall()
+            return [self._get_rollout(connection, str(row["rollout_id"])) for row in rows]
+
+    def get_rollout(self, rollout_id: str) -> RolloutResponse:
+        with self._connection() as connection:
+            return self._get_rollout(connection, rollout_id)
+
+    def update_rollout(
+        self,
+        rollout_id: str,
+        target_fw_version: str | None,
+        from_fw_version: str | None,
+        percent: int | None,
+        enabled: bool | None,
+    ) -> RolloutResponse:
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            self._require_rollout(connection, rollout_id)
+            if target_fw_version is not None:
+                connection.execute(
+                    "UPDATE rollouts SET target_fw_version = ? WHERE rollout_id = ?",
+                    (target_fw_version, rollout_id),
+                )
+            if from_fw_version is not None:
+                connection.execute(
+                    "UPDATE rollouts SET from_fw_version = ? WHERE rollout_id = ?",
+                    (from_fw_version, rollout_id),
+                )
+            if percent is not None:
+                connection.execute(
+                    "UPDATE rollouts SET percent = ? WHERE rollout_id = ?",
+                    (percent, rollout_id),
+                )
+            if enabled is not None:
+                connection.execute(
+                    "UPDATE rollouts SET enabled = ? WHERE rollout_id = ?",
+                    (1 if enabled else 0, rollout_id),
+                )
+            connection.execute(
+                "UPDATE rollouts SET updated_at = ? WHERE rollout_id = ?",
+                (now, rollout_id),
+            )
+            return self._get_rollout(connection, rollout_id)
+
+    def delete_rollout(self, rollout_id: str) -> None:
+        with self._connection() as connection:
+            self._require_rollout(connection, rollout_id)
+            connection.execute(
+                "DELETE FROM rollouts WHERE rollout_id = ?", (rollout_id,)
+            )
+
+    @staticmethod
+    def _gray_selected(rollout_id: str, device_id: str, percent: int) -> bool:
+        if percent >= 100:
+            return True
+        if percent <= 0:
+            return False
+        digest = hashlib.sha256(f"{rollout_id}:{device_id}".encode()).hexdigest()
+        return int(digest[:8], 16) % 100 < percent
+
+    def select_ota_target(
+        self,
+        device_id: str,
+        product_id: str,
+        hw_version: str,
+        current_fw_version: str,
+    ) -> tuple[FirmwareResponse | None, str]:
+        """Resolve the firmware a device should upgrade to (with a reason code)."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM rollouts
+                WHERE enabled = 1 AND product_id = ? AND hw_version = ?
+                ORDER BY updated_at DESC, rollout_id DESC
+                """,
+                (product_id, hw_version),
+            ).fetchall()
+            candidates = [
+                row
+                for row in rows
+                if row["from_fw_version"] is None
+                or str(row["from_fw_version"]) == current_fw_version
+            ]
+            if not candidates:
+                return None, "no_rollout"
+            rollout = candidates[0]
+            target_version = str(rollout["target_fw_version"])
+            if target_version == current_fw_version:
+                return None, "up_to_date"
+            if not self._gray_selected(
+                str(rollout["rollout_id"]), device_id, int(rollout["percent"])
+            ):
+                return None, "not_selected"
+            firmware_row = connection.execute(
+                """
+                SELECT * FROM firmware
+                WHERE product_id = ? AND hw_version = ? AND fw_version = ?
+                """,
+                (product_id, hw_version, target_version),
+            ).fetchone()
+            if firmware_row is None:
+                return None, "firmware_missing"
+            return self._firmware_from_row(firmware_row), "match"
+
+    def begin_ota_dispatch(
+        self,
+        device_id: str,
+        firmware: FirmwareResponse,
+        message_id: str,
+    ) -> tuple[OtaUpdateRecord, bool]:
+        """Idempotently create a pending OTA record; returns (record, created)."""
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            self._require_device(connection, device_id)
+            existing = connection.execute(
+                "SELECT * FROM ota_updates WHERE device_id = ? AND firmware_id = ?",
+                (device_id, firmware.firmware_id),
+            ).fetchone()
+            if existing is not None and str(existing["status"]) != "failed":
+                return self._ota_from_row(existing), False
+            if existing is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO ota_updates(
+                        device_id, firmware_id, product_id, hw_version,
+                        target_fw_version, status, message_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                    """,
+                    (
+                        device_id, firmware.firmware_id, firmware.product_id,
+                        firmware.hw_version, firmware.fw_version, message_id, now, now,
+                    ),
+                )
+                record = self._get_ota(connection, int(cursor.lastrowid))
+            else:
+                connection.execute(
+                    """
+                    UPDATE ota_updates
+                    SET status = 'pending', message_id = ?, updated_at = ?
+                    WHERE update_id = ?
+                    """,
+                    (message_id, now, int(existing["update_id"])),
+                )
+                record = self._get_ota(connection, int(existing["update_id"]))
+            return record, True
+
+    def record_ota_result(
+        self,
+        device_id: str,
+        status: str,
+        fw_version: str | None = None,
+        message_id: str | None = None,
+    ) -> OtaUpdateRecord:
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            self._require_device(connection, device_id)
+            if fw_version is not None:
+                row = connection.execute(
+                    """
+                    SELECT * FROM ota_updates
+                    WHERE device_id = ? AND target_fw_version = ?
+                    ORDER BY update_id DESC LIMIT 1
+                    """,
+                    (device_id, fw_version),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT * FROM ota_updates WHERE device_id = ?
+                    ORDER BY update_id DESC LIMIT 1
+                    """,
+                    (device_id,),
+                ).fetchone()
+            if row is None:
+                raise OtaUpdateNotFoundError(device_id)
+            connection.execute(
+                "UPDATE ota_updates SET status = ?, message_id = COALESCE(?, message_id), "
+                "updated_at = ? WHERE update_id = ?",
+                (status, message_id, now, int(row["update_id"])),
+            )
+            return self._get_ota(connection, int(row["update_id"]))
+
+    def list_ota_updates(self, device_id: str) -> list[OtaUpdateRecord]:
+        with self._connection() as connection:
+            self._require_device(connection, device_id)
+            rows = connection.execute(
+                "SELECT * FROM ota_updates WHERE device_id = ? ORDER BY update_id DESC",
+                (device_id,),
+            ).fetchall()
+            return [self._ota_from_row(row) for row in rows]
+
     # --- helpers -----------------------------------------------------------
 
     def _get_device(self, connection: sqlite3.Connection, device_id: str) -> DeviceResponse:
@@ -1107,6 +1462,103 @@ class DeviceStore:
         ).fetchone()
         if row is None:
             raise AutomationNotFoundError(automation_id)
+
+    def _get_firmware(
+        self, connection: sqlite3.Connection, firmware_id: str
+    ) -> FirmwareResponse:
+        row = connection.execute(
+            "SELECT * FROM firmware WHERE firmware_id = ?", (firmware_id,)
+        ).fetchone()
+        if row is None:
+            raise FirmwareNotFoundError(firmware_id)
+        return self._firmware_from_row(row)
+
+    def _require_firmware(
+        self, connection: sqlite3.Connection, firmware_id: str
+    ) -> None:
+        row = connection.execute(
+            "SELECT 1 FROM firmware WHERE firmware_id = ?", (firmware_id,)
+        ).fetchone()
+        if row is None:
+            raise FirmwareNotFoundError(firmware_id)
+
+    def _get_rollout(
+        self, connection: sqlite3.Connection, rollout_id: str
+    ) -> RolloutResponse:
+        row = connection.execute(
+            "SELECT * FROM rollouts WHERE rollout_id = ?", (rollout_id,)
+        ).fetchone()
+        if row is None:
+            raise RolloutNotFoundError(rollout_id)
+        return self._rollout_from_row(row)
+
+    def _require_rollout(
+        self, connection: sqlite3.Connection, rollout_id: str
+    ) -> None:
+        row = connection.execute(
+            "SELECT 1 FROM rollouts WHERE rollout_id = ?", (rollout_id,)
+        ).fetchone()
+        if row is None:
+            raise RolloutNotFoundError(rollout_id)
+
+    def _get_ota(
+        self, connection: sqlite3.Connection, update_id: int
+    ) -> OtaUpdateRecord:
+        row = connection.execute(
+            "SELECT * FROM ota_updates WHERE update_id = ?", (update_id,)
+        ).fetchone()
+        if row is None:
+            raise OtaUpdateNotFoundError(str(update_id))
+        return self._ota_from_row(row)
+
+    @staticmethod
+    def _firmware_from_row(row: sqlite3.Row) -> FirmwareResponse:
+        sign_value = row["sign"]
+        notes_value = row["notes"]
+        return FirmwareResponse(
+            firmware_id=str(row["firmware_id"]),
+            product_id=str(row["product_id"]),
+            hw_version=str(row["hw_version"]),
+            fw_version=str(row["fw_version"]),
+            url=str(row["url"]),
+            sha256=str(row["sha256"]),
+            sign=None if sign_value is None else str(sign_value),
+            notes=None if notes_value is None else str(notes_value),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
+
+    @staticmethod
+    def _rollout_from_row(row: sqlite3.Row) -> RolloutResponse:
+        from_value = row["from_fw_version"]
+        return RolloutResponse(
+            rollout_id=str(row["rollout_id"]),
+            product_id=str(row["product_id"]),
+            hw_version=str(row["hw_version"]),
+            target_fw_version=str(row["target_fw_version"]),
+            from_fw_version=None if from_value is None else str(from_value),
+            percent=int(row["percent"]),
+            enabled=bool(row["enabled"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
+
+    @staticmethod
+    def _ota_from_row(row: sqlite3.Row) -> OtaUpdateRecord:
+        firmware_value = row["firmware_id"]
+        message_value = row["message_id"]
+        return OtaUpdateRecord(
+            update_id=int(row["update_id"]),
+            device_id=str(row["device_id"]),
+            firmware_id=None if firmware_value is None else str(firmware_value),
+            product_id=str(row["product_id"]),
+            hw_version=str(row["hw_version"]),
+            target_fw_version=str(row["target_fw_version"]),
+            status=str(row["status"]),
+            message_id=None if message_value is None else str(message_value),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
 
     @staticmethod
     def _message_processed(connection: sqlite3.Connection, scope: str, message_id: str) -> bool:

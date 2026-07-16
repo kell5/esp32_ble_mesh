@@ -16,6 +16,7 @@
 - 自动化：`触发 → 动作` 规则，`reported` 字段命中条件时执行动作（下发设备/整组/激活场景）。
 - 邮箱账号体系（demo 级）：注册/登录换取 per-user Bearer token；每个账号是独立设备空间，只能访问自己认领的设备。
 - 门铃事件记录：门铃 `event` 主题落库，支持按设备/按账号分页查询（`message_id` 幂等去重）。
+- OTA 服务端：固件仓库（`product_id + hw_version + fw_version → url + sha256 + sign`）、灰度 rollout、`down/ota` 下发、升级进度回报；无匹配固件不误下发，重复下发幂等。
 - 可选 `X-Cloud-Token` 共享密钥（管理/设备置备用）；默认只监听 `127.0.0.1`。
 
 ## MQTT 兼容映射
@@ -175,6 +176,44 @@ curl -X POST http://127.0.0.1:8000/api/v1/users/user-001/automations \
 
 动作类型：`device`（需 `device_id`+`state`）、`group`（需 `group_id`+`state`）、`scene`（需 `scene_id`）。触发条件按 `reported[field] == equals` 精确匹配。
 
+### OTA（T-CLOUD-3）
+
+固件仓库、灰度 rollout 与升级下发均为管理类接口（`X-Cloud-Token`），设备侧仅通过 `GET .../ota/updates` 读取自己的升级记录（归属校验）。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/api/v1/firmware` | 注册/刷新固件（同 `product_id+hw_version+fw_version` 为幂等更新） |
+| `GET` | `/api/v1/firmware?product_id=` | 列出固件（可按产品过滤） |
+| `GET` `DELETE` | `/api/v1/firmware/<id>` | 读取、删除固件 |
+| `POST` | `/api/v1/rollouts` | 新建灰度规则 |
+| `GET` | `/api/v1/rollouts` | 列出 rollout |
+| `GET` `PATCH` `DELETE` | `/api/v1/rollouts/<id>` | 读取、更新、删除 rollout |
+| `POST` | `/api/v1/devices/<id>/ota/check` | 按上报版本匹配并下发 OTA（管理员/置备触发） |
+| `POST` | `/api/v1/devices/<id>/ota/progress` | 设备回报升级进度/结果 |
+| `GET` | `/api/v1/devices/<id>/ota/updates` | 查询该设备升级记录（归属校验） |
+
+匹配三元组为 `(product_id, hw_version, fw_version)`。rollout 按 `(product_id, hw_version)` 命中，可选 `from_fw_version` 限定当前版本，`percent`（0–100）按 `sha256(rollout_id:device_id)` 做**确定性**灰度（同一设备结果稳定）。命中后校验固件是否存在，存在才下发；`down/ota` 信封 `data` 携带 `url`、`sha256`、`sign`。返回 `reason` 覆盖 `dispatched | already_dispatched | no_rollout | up_to_date | not_selected | firmware_missing`：
+
+- 无匹配 rollout 或目标固件缺失 → 不下发（`no_rollout` / `firmware_missing`）。
+- 目标版本等于当前版本 → 不下发（`up_to_date`）。
+- 已对该设备下发过同一固件且未失败 → 幂等，不重复下发（`already_dispatched`）。
+
+设备通过规范化 `up` 上报同时带 `product_id + hw_version + fw_version`（或旧字段 `version`）时，云端会自动触发一次匹配下发。
+
+```bash
+# 注册固件
+curl -X POST http://127.0.0.1:8000/api/v1/firmware \
+  -H "X-Cloud-Token: replace-with-a-random-token" \
+  -H "Content-Type: application/json" \
+  -d '{"product_id":"bulb","hw_version":"rev-a","fw_version":"1.1.0","url":"https://ota.example.com/1.1.0.bin","sha256":"<64位十六进制>","sign":"<签名>"}'
+
+# 建立 10% 灰度
+curl -X POST http://127.0.0.1:8000/api/v1/rollouts \
+  -H "X-Cloud-Token: replace-with-a-random-token" \
+  -H "Content-Type: application/json" \
+  -d '{"product_id":"bulb","hw_version":"rev-a","target_fw_version":"1.1.0","percent":10}'
+```
+
 ## 验证
 
 ```powershell
@@ -224,7 +263,7 @@ location ^~ /cloud/ {
 
 ## 后续边界
 
-当前邮箱账号体系为 **demo 级**：token 不过期、无邮箱验证/找回密码/登录限流，密码哈希用标准库 PBKDF2。生产化前还需正式认证（如 JWT+刷新、过期与限流）、broker ACL 和凭据轮换。TLS 由自有服务器的 Nginx 反代提供（见上）。门铃事件仅记录事件元数据，尚无快照/媒体存储与索引；固件 OTA 未实现。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。
+当前邮箱账号体系为 **demo 级**：token 不过期、无邮箱验证/找回密码/登录限流，密码哈希用标准库 PBKDF2。生产化前还需正式认证（如 JWT+刷新、过期与限流）、broker ACL 和凭据轮换。TLS 由自有服务器的 Nginx 反代提供（见上）。门铃事件仅记录事件元数据，尚无快照/媒体存储与索引。OTA 已实现服务端（固件仓库、灰度、`down/ota` 下发与进度回报），设备侧 `esp_https_ota` + 双分区 A/B 与失败回滚仍待固件实现。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。
 
 ## MQTT 协议规范（T-CLOUD-2）
 

@@ -24,11 +24,20 @@ from .models import (
     GroupRequest,
     GroupResponse,
     GroupUpdateRequest,
+    FirmwareRequest,
+    FirmwareResponse,
     HealthResponse,
     LoginRequest,
     OfflineRequest,
+    OtaCheckRequest,
+    OtaCheckResponse,
+    OtaProgressRequest,
+    OtaUpdateRecord,
     RegisterAccountRequest,
     RegisterDeviceRequest,
+    RolloutRequest,
+    RolloutResponse,
+    RolloutUpdateRequest,
     RoomRequest,
     RoomResponse,
     RoomUpdateRequest,
@@ -39,6 +48,7 @@ from .models import (
     ShadowResponse,
 )
 from .mqtt_bridge import MqttBridge
+from .ota import OtaEngine
 from .security import Principal
 from .storage import (
     AutomationNotFoundError,
@@ -47,8 +57,11 @@ from .storage import (
     DeviceNotOwnedError,
     DeviceStore,
     EmailAlreadyExistsError,
+    FirmwareNotFoundError,
     GroupNotFoundError,
     InvalidCredentialsError,
+    OtaUpdateNotFoundError,
+    RolloutNotFoundError,
     RoomNotFoundError,
     SceneNotFoundError,
 )
@@ -68,6 +81,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bridge = MqttBridge(store, active_settings)
     engine = AutomationEngine(store, bridge.publish_desired)
     bridge.set_reported_handler(engine.on_reported)
+    ota_engine = OtaEngine(store, bridge.publish_ota)
+    bridge.set_version_handler(ota_engine.on_version_report)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -658,9 +673,176 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise not_found("automation", error) from error
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    # --- ota: firmware repository -----------------------------------------
+
+    @application.post(
+        "/api/v1/firmware",
+        response_model=FirmwareResponse,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=[authorization],
+    )
+    def register_firmware(request: FirmwareRequest) -> FirmwareResponse:
+        return store.register_firmware(
+            request.product_id,
+            request.hw_version,
+            request.fw_version,
+            request.url,
+            request.sha256,
+            request.sign,
+            request.notes,
+        )
+
+    @application.get(
+        "/api/v1/firmware",
+        response_model=list[FirmwareResponse],
+        dependencies=[authorization],
+    )
+    def list_firmware(
+        product_id: str | None = Query(default=None),
+    ) -> list[FirmwareResponse]:
+        return store.list_firmware(product_id)
+
+    @application.get(
+        "/api/v1/firmware/{firmware_id}",
+        response_model=FirmwareResponse,
+        dependencies=[authorization],
+    )
+    def get_firmware(firmware_id: str) -> FirmwareResponse:
+        try:
+            return store.get_firmware(firmware_id)
+        except FirmwareNotFoundError as error:
+            raise not_found("firmware", error) from error
+
+    @application.delete(
+        "/api/v1/firmware/{firmware_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[authorization],
+    )
+    def delete_firmware(firmware_id: str) -> Response:
+        try:
+            store.delete_firmware(firmware_id)
+        except FirmwareNotFoundError as error:
+            raise not_found("firmware", error) from error
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # --- ota: rollouts -----------------------------------------------------
+
+    @application.post(
+        "/api/v1/rollouts",
+        response_model=RolloutResponse,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=[authorization],
+    )
+    def create_rollout(request: RolloutRequest) -> RolloutResponse:
+        return store.create_rollout(
+            request.product_id,
+            request.hw_version,
+            request.target_fw_version,
+            request.from_fw_version,
+            request.percent,
+            request.enabled,
+        )
+
+    @application.get(
+        "/api/v1/rollouts",
+        response_model=list[RolloutResponse],
+        dependencies=[authorization],
+    )
+    def list_rollouts() -> list[RolloutResponse]:
+        return store.list_rollouts()
+
+    @application.get(
+        "/api/v1/rollouts/{rollout_id}",
+        response_model=RolloutResponse,
+        dependencies=[authorization],
+    )
+    def get_rollout(rollout_id: str) -> RolloutResponse:
+        try:
+            return store.get_rollout(rollout_id)
+        except RolloutNotFoundError as error:
+            raise not_found("rollout", error) from error
+
+    @application.patch(
+        "/api/v1/rollouts/{rollout_id}",
+        response_model=RolloutResponse,
+        dependencies=[authorization],
+    )
+    def update_rollout(
+        rollout_id: str, request: RolloutUpdateRequest
+    ) -> RolloutResponse:
+        try:
+            return store.update_rollout(
+                rollout_id,
+                request.target_fw_version,
+                request.from_fw_version,
+                request.percent,
+                request.enabled,
+            )
+        except RolloutNotFoundError as error:
+            raise not_found("rollout", error) from error
+
+    @application.delete(
+        "/api/v1/rollouts/{rollout_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[authorization],
+    )
+    def delete_rollout(rollout_id: str) -> Response:
+        try:
+            store.delete_rollout(rollout_id)
+        except RolloutNotFoundError as error:
+            raise not_found("rollout", error) from error
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # --- ota: device dispatch ---------------------------------------------
+
+    @application.post(
+        "/api/v1/devices/{device_id}/ota/check",
+        response_model=OtaCheckResponse,
+        dependencies=[authorization],
+    )
+    def check_device_ota(
+        device_id: str, request: OtaCheckRequest
+    ) -> OtaCheckResponse:
+        try:
+            store.get_device(device_id)
+        except DeviceNotFoundError as error:
+            raise missing_device(error) from error
+        return ota_engine.evaluate(
+            device_id, request.product_id, request.hw_version, request.fw_version
+        )
+
+    @application.post(
+        "/api/v1/devices/{device_id}/ota/progress",
+        response_model=OtaUpdateRecord,
+        dependencies=[authorization],
+    )
+    def report_device_ota(
+        device_id: str, request: OtaProgressRequest
+    ) -> OtaUpdateRecord:
+        try:
+            return store.record_ota_result(
+                device_id, request.status, request.fw_version, request.message_id
+            )
+        except DeviceNotFoundError as error:
+            raise missing_device(error) from error
+        except OtaUpdateNotFoundError as error:
+            raise not_found("ota update", error) from error
+
+    @application.get(
+        "/api/v1/devices/{device_id}/ota/updates",
+        response_model=list[OtaUpdateRecord],
+    )
+    def list_device_ota(
+        device_id: str,
+        principal: Principal = Depends(get_principal),
+    ) -> list[OtaUpdateRecord]:
+        enforce_device(principal, device_id)
+        return store.list_ota_updates(device_id)
+
     application.state.store = store
     application.state.mqtt_bridge = bridge
     application.state.automation_engine = engine
+    application.state.ota_engine = ota_engine
     return application
 
 

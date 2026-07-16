@@ -10,8 +10,22 @@ USER_ID_PATTERN = r"^[A-Za-z0-9._:@-]{1,96}$"
 TYPE_PATTERN = r"^[a-z][a-z0-9_]{0,47}$"
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 CAPABILITY_PATTERN = r"^[a-z][a-z0-9_.-]{0,63}$"
+PRODUCT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+HW_VERSION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+FW_VERSION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+SHA256_PATTERN = r"^[A-Fa-f0-9]{64}$"
 
 CapabilityName = Annotated[str, Field(pattern=CAPABILITY_PATTERN)]
+
+OtaReason = Literal[
+    "dispatched",
+    "already_dispatched",
+    "no_rollout",
+    "up_to_date",
+    "not_selected",
+    "firmware_missing",
+]
+OtaStatus = Literal["pending", "downloading", "success", "failed"]
 
 
 class ApiModel(BaseModel):
@@ -231,3 +245,93 @@ class AutomationResponse(ApiModel):
     action: AutomationAction
     created_at: datetime
     updated_at: datetime
+
+
+class FirmwareRequest(ApiModel):
+    product_id: str = Field(pattern=PRODUCT_ID_PATTERN)
+    hw_version: str = Field(pattern=HW_VERSION_PATTERN)
+    fw_version: str = Field(pattern=FW_VERSION_PATTERN)
+    url: str = Field(min_length=1, max_length=1024)
+    sha256: str = Field(pattern=SHA256_PATTERN)
+    sign: str | None = Field(default=None, max_length=1024)
+    notes: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode="after")
+    def _check_url(self) -> FirmwareRequest:
+        if not (self.url.startswith("https://") or self.url.startswith("http://")):
+            raise ValueError("url must be an http(s) URL")
+        return self
+
+
+class FirmwareResponse(ApiModel):
+    firmware_id: str
+    product_id: str
+    hw_version: str
+    fw_version: str
+    url: str
+    sha256: str
+    sign: str | None
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RolloutRequest(ApiModel):
+    product_id: str = Field(pattern=PRODUCT_ID_PATTERN)
+    hw_version: str = Field(pattern=HW_VERSION_PATTERN)
+    target_fw_version: str = Field(pattern=FW_VERSION_PATTERN)
+    from_fw_version: str | None = Field(default=None, pattern=FW_VERSION_PATTERN)
+    percent: int = Field(default=100, ge=0, le=100)
+    enabled: bool = True
+
+
+class RolloutUpdateRequest(ApiModel):
+    target_fw_version: str | None = Field(default=None, pattern=FW_VERSION_PATTERN)
+    from_fw_version: str | None = Field(default=None, pattern=FW_VERSION_PATTERN)
+    percent: int | None = Field(default=None, ge=0, le=100)
+    enabled: bool | None = None
+
+
+class RolloutResponse(ApiModel):
+    rollout_id: str
+    product_id: str
+    hw_version: str
+    target_fw_version: str
+    from_fw_version: str | None
+    percent: int
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class OtaUpdateRecord(ApiModel):
+    update_id: int
+    device_id: str
+    firmware_id: str | None
+    product_id: str
+    hw_version: str
+    target_fw_version: str
+    status: OtaStatus
+    message_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OtaCheckRequest(ApiModel):
+    product_id: str = Field(pattern=PRODUCT_ID_PATTERN)
+    hw_version: str = Field(pattern=HW_VERSION_PATTERN)
+    fw_version: str = Field(pattern=FW_VERSION_PATTERN)
+
+
+class OtaCheckResponse(ApiModel):
+    dispatched: bool
+    published: bool
+    reason: OtaReason
+    target: FirmwareResponse | None
+    update: OtaUpdateRecord | None
+
+
+class OtaProgressRequest(ApiModel):
+    status: OtaStatus
+    fw_version: str | None = Field(default=None, pattern=FW_VERSION_PATTERN)
+    message_id: str | None = Field(default=None, min_length=1, max_length=128)

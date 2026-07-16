@@ -206,10 +206,12 @@
 - 契约：云端**同时**订阅新命名空间与现有 topic；payload 统一信封（`v/msg_id/ts/type/data`）；幂等去重。
 - 验收自检：给出新旧两种 topic 的单测均能入影子；现有 Mesh/门铃链路回归不破坏（`test_api`/`test_organization` 全过）。
 
-#### T-CLOUD-3 — OTA 服务端（固件仓库 + 灰度 + 下发）
+#### T-CLOUD-3 — OTA 服务端（固件仓库 + 灰度 + 下发）✅ 已完成
 - 依赖：T-CLOUD-1。边界：新增 `firmware`/`rollout` 存储 + 端点 + MQTT `down/ota` 下发 + 测试。
 - 契约：`(product_id, hw_version, fw_version)` 匹配；灰度比例；下发含 `url+sha256+sign`。
 - 验收自检：ruff + 单测（匹配/灰度/幂等下发）；无固件时不误下发。
+- 落地：`storage.py` 新增 `firmware`/`rollouts`/`ota_updates` 表与方法；`models.py` 新增 OTA 请求/响应；`ota.py` 新增 `OtaEngine`（匹配→确定性灰度→幂等下发）；`mqtt_bridge.py` 新增 `publish_ota` 与版本上报触发；`main.py` 新增 `/api/v1/firmware`、`/api/v1/rollouts`、`/devices/{id}/ota/{check,progress,updates}`。
+- 结果：`ruff check` 干净；`unittest` 全绿（50 项，新增 `tests/test_ota.py` 15 项，覆盖匹配/灰度/幂等/无固件不误下发/版本上报触发/进度回报）。设备侧 `esp_https_ota`+双分区回滚由 T-FW-OTA-HTTPS/T-FW-OTA-MESH 承接。
 
 ### 分组 P2（设备侧固件）
 

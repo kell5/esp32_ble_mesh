@@ -10,6 +10,7 @@ from paho.mqtt import client as mqtt
 from pydantic import JsonValue
 
 from .config import Settings
+from .models import FirmwareResponse
 from .storage import DeviceStore
 
 FARMELY_ROOT = "farmely"
@@ -63,6 +64,7 @@ class MqttBridge:
         self._store = store
         self._settings = settings
         self._on_reported = on_reported
+        self._on_version_report: Callable[[str, str, str, str], None] | None = None
         self._client: mqtt.Client | None = None
         self._connected = Event()
 
@@ -72,6 +74,9 @@ class MqttBridge:
 
     def set_reported_handler(self, handler: Callable[[str], None]) -> None:
         self._on_reported = handler
+
+    def set_version_handler(self, handler: Callable[[str, str, str, str], None]) -> None:
+        self._on_version_report = handler
 
     def start(self) -> None:
         if self._client is not None:
@@ -137,6 +142,39 @@ class MqttBridge:
             or legacy.rc == mqtt.MQTT_ERR_SUCCESS
         )
 
+    def publish_ota(
+        self,
+        device_id: str,
+        device_class: str,
+        firmware: FirmwareResponse,
+        message_id: str,
+    ) -> bool:
+        client = self._client
+        if client is None or not self.connected:
+            return False
+        envelope = {
+            "v": 1,
+            "msg_id": message_id,
+            "ts": int(time.time()),
+            "type": "ota",
+            "data": {
+                "command": "update",
+                "product_id": firmware.product_id,
+                "hw_version": firmware.hw_version,
+                "fw_version": firmware.fw_version,
+                "url": firmware.url,
+                "sha256": firmware.sha256,
+                "sign": firmware.sign,
+            },
+        }
+        result = client.publish(
+            f"{FARMELY_ROOT}/{device_class}/{device_id}/down/ota",
+            json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
+            qos=1,
+            retain=False,
+        )
+        return result.rc == mqtt.MQTT_ERR_SUCCESS
+
     def _apply_reported(
         self,
         device_id: str,
@@ -152,6 +190,23 @@ class MqttBridge:
         )
         if changed and self._on_reported is not None:
             self._on_reported(device_id)
+        if changed:
+            self._maybe_trigger_ota(device_id, reported)
+
+    def _maybe_trigger_ota(self, device_id: str, reported: dict[str, JsonValue]) -> None:
+        handler = self._on_version_report
+        if handler is None:
+            return
+        product_id = reported.get("product_id")
+        hw_version = reported.get("hw_version")
+        fw_version = reported.get("fw_version", reported.get("version"))
+        if not isinstance(product_id, str) or not isinstance(hw_version, str):
+            return
+        if isinstance(fw_version, int | float) and not isinstance(fw_version, bool):
+            fw_version = str(fw_version)
+        if not isinstance(fw_version, str) or not fw_version:
+            return
+        handler(device_id, product_id, hw_version, fw_version)
 
     def ingest(self, topic: str, payload: bytes) -> None:
         text = payload.decode("utf-8", errors="replace")
