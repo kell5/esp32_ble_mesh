@@ -1,22 +1,22 @@
 # BLE Mesh + Wi-Fi 硬件联调计划与验收标准
 
-> 最近更新：2026-07-14
+> 最近更新：2026-07-16
 > 目的：在刷写设备前固定硬件映射、目标架构、执行顺序、结果判定和记录格式。  
 > 本文中的“通过”必须有构建输出、串口日志和可观察结果支撑；仅编译成功不等于无线 Mesh 联调成功。
 
 ## 1. 当前硬件矩阵
 
-| 角色 | 硬件 | 串口 | 灯/外设 | 本轮约束 |
-|---|---|---|---|---|
-| 门铃 | ESP32-S3 N8R8 + 摄像头 | 当前拔下（历史 COM7） | 摄像头、门铃按键 | 实测 Flash 8 MB、PSRAM 8 MB；保持 Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
-| BLE Mesh 网关 | ESP32-S3 N16R8 | COM4 | GPIO48 板载 WS2812 RGB | 已实测 16 MB Flash、8 MB PSRAM；Provisioner/Config Client/Generic OnOff Client；Wi-Fi/MQTT bridge 已实现但尚未联网验收 |
-| BLE Mesh 灯节点 A | ESP32-S3 N16R8 | COM8 | GPIO48 板载 WS2812 RGB | 已完成 Provisioning、Config 和 Generic OnOff 实物链路 |
-| BLE Mesh 灯节点 B | ESP32-WROOM | COM7（历史 COM6） | D2/GPIO2 | 2026-07-14 以芯片、MAC、项目名和 Mesh 地址确认；地址 `0x0006` |
-| 非活动端口 | 历史板卡 | COM14、COM15 | 不纳入当前映射 | 两个串口/板卡存在启动或下载异常，不再阻塞主线 |
+| 角色 | 硬件 | 串口 | MAC | 灯/外设 | 2026-07-16 实测状态 |
+|---|---|---|---|---|---|
+| 门铃 | ESP32-S3 **N8R8** + 摄像头 | COM7（CH340） | `dc:da:0c:4c:34:08` | OV3660 摄像头、GPIO0 门铃按键 | 在线：`camera_stream`(253c8c5)；Wi-Fi 连 `Xiaomi`、IP `10.50.212.74`；MQTT 已连 `door-001`；快照命令下行 + ACK 上行往返通过 |
+| BLE Mesh 网关 | ESP32-S3 N16R8 | COM4（原生 USB-JTAG） | `e0:72:a1:d3:15:48` | GPIO48 板载 WS2812 RGB | 在线：Provisioner 初始化；重启后自动查询并让 `0x0005`/`0x0006` 重新订阅 `0xC000`，fresh GET 成功；**Wi-Fi 未配置**（`CONFIG_FARMELY_WIFI_SSID=""`），MQTT bridge 未联网 |
+| BLE Mesh 灯节点（`0x0005`） | ESP32-S3 N16R8 | COM9（CH340） | `14:c1:9f:cb:59:e8` | GPIO48 板载 WS2812 RGB | 在线：mesh 内响应网关 GET，onoff=`0x01`；应用控制台走原生 USB-JTAG，CH340 口仅见 ROM/bootloader |
+| BLE Mesh 灯节点（`0x0006`） | ESP32-WROOM (D0WD-V3) | COM8（CH340） | `b4:bf:e9:0b:55:c0` | D2/GPIO2 | 在线：`onoff_server`(0e9520c)，已配网 `addr 0x0006`，onoff=`0x00` |
 
-本轮固定映射为 COM4 网关、COM8 S3 节点 `0x0005`、COM7 WROOM
-节点 `0x0006`；摄像头门铃已拔下。串口号不等于永久产品角色，每次
-刷写前必须重新读取芯片型号和 MAC，并结合固件项目名、Mesh 地址确认。
+> ⚠ 串口号相较 2026-07-14 已整体变化（门铃回插、S3 灯节点移到 COM9、WROOM 移到
+> COM8）。串口号不等于永久产品角色；每次刷写前必须用 esptool 重新读取芯片型号/Flash/PSRAM/MAC，
+> 并结合固件项目名与 Mesh 地址确认。本轮映射由 esptool `flash-id` + 各口启动日志确认。
+> broker 使用 `mqtt://121.40.131.194:1883`；开发 VM 可直连该 broker。
 
 ### 1.1 WROOM 供电告警处理边界
 
@@ -181,5 +181,31 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + 已保存双节点 | `0xC000` 组订阅、group multicast、20 轮分组/50 条定向自测 | 未通过 | 默认和自测固件均构建通过，app 分区剩余 46%；启动日志曾确认 `0x0005`、`0x0006` 订阅 `0xC000`。正式自测时 `0x0005` 离线，分组 `0/20`、定向 `25/50`，其中在线 `0x0006` 的 25 条定向命令均成功。需恢复 `0x0005` 在线后重测，不能记录为分组或 50 条无误控通过 |
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8/`0x0005` + COM6/`0x0006` | 双节点在线、`0xC000` group multicast、20 轮分组、50 条定向及非目标复查、状态恢复、生产固件恢复 | 通过（逻辑状态） | COM8 恢复在线后真实台架结果为 `group=20/20 directed=50/50`，没有分组、定向或在线预检失败日志；结束状态恢复为 `0x0005=0`、`0x0006=1`。COM4 随后刷回默认关闭自测的 827552-byte 生产固件，冷启动确认 Provisioner 初始化且两节点重新订阅 `0xC000`。COM4/COM6/COM8 均已释放，COM7 未打开。物理 WS2812/GPIO2 灯态、MQTT/cloud 与共存压力仍未验收 |
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8/`0x0005` + COM7/`0x0006` | 慢速组控、定向物理隔离、节点回调、状态恢复、生产固件恢复 | 通过（一次人工物理验收） | COM4 结果 `group=4/4 directed=4/4`；用户在完整序列结束后确认“灯光正常”。COM7 同步记录到交替 `onoff 0x00/0x01` 的 Generic Server state-change callback。结束恢复 `0x0005=1`、`0x0006=0`；COM4 刷回 827552-byte 生产镜像并校验 hash，冷启动重新订阅两节点、fresh Get `(1,0)`，无临时自测输出，COM4/COM7/COM8 均已释放。早一轮曾观察 `D2常亮，48长灭`，仍需多次断电/冷启动复测后才能声明长期稳定 |
+
+| 2026-07-16 | 现场固件（未重刷） | COM4/7/8/9 全部在线 | 芯片重识别、四板现状、门铃 MQTT 往返、mesh 在线预检 | 部分通过 | esptool 重识别：COM4=S3 16MB(网关,原生USB)、COM7=S3 **8MB N8R8**(门铃)、COM8=ESP32 4MB WROOM、COM9=S3 16MB(灯节点)。门铃在线并连 broker，`snapshot` 命令经 `doorbell/door-001/cmd` 与 `farmely/doorbell/door-001/down/cmd` 均收到 `ack_msg_id` 回执（往返通过）。网关重启后 `0x0005`(onoff=1)/`0x0006`(onoff=0) 均在线、重订阅 `0xC000`、fresh GET 成功（此前 `0x0005` 离线的阻塞点已消除）。**未做**：网关 Wi-Fi 未配置故 MQTT→mesh 云端闭环、group/定向实体灯态、门铃实体按键 ringing/视频观看均未验收 |
+
+| 2026-07-16 | 网关 SoftAP App 配网固件（COM4 已刷 3MB 分区版） | COM4 网关 + 荣耀手机 | SoftAP 运行时配网、手机关联/App 配网、掉线排查 | 未通过（待续） | 网关固件已实现 `network_provisioning`+`scheme_softap`，串口实证热点 `Gateway-D31548`@192.168.4.1 开启、DHCP 起、BLE Mesh 与配网共存（`0x0005/0x0006` 订阅 `0xC000`）。手机侧现象：能搜到 SSID，能成功关联（`station <randMAC> join, AID=1`），但每次约 4~18 秒后被手机主动断开（`leave ... reason = 3` = STA leaving；随后 `removing station after unsuccessful auth/assoc`）。有浏览器流量时链接可维持到 ~18s 并建立数据 BA（`tid:6`），说明关联与数据通路本身正常。全程未见任何 protocomm/HTTP 配网请求到达网关，也未连上 Xiaomi、未起 MQTT。根因判定：荣耀 MagicOS 对无互联网热点自动断开过快，手动多步操作来不及完成配网；非网关拒绝、非 PoP、非 App 逻辑错误 |
+
+## SoftAP App 配网调查（2026-07-16，进行中）
+
+### 已确认证据
+- 网关侧：`network_prov_mgr: Provisioning started with service name : Gateway-D31548`，SoftAP@192.168.4.1、DHCP server started、BLE Mesh 与配网共存正常。
+- 手机侧（荣耀 / MagicOS，随机 MAC `66:69:53:3a:29:b3`）：`station ... join, AID=1` 关联成功 → 约 4~18s 后 `station ... leave, AID = 1, reason = 3`（reason 3 = 802.11 STA is leaving，手机主动离开）→ `removing station after unsuccessful auth/assoc`。
+- 有主动流量（浏览器访问 192.168.4.1）时连接维持更久（~18s）并建立数据 BA（`tid:6`），证明关联+数据通路正常。
+- 全程串口未见 protocomm/HTTP 配网请求，也未 `NETWORK_PROV_WIFI_CRED_RECV`、未连 Xiaomi、未起 MQTT。
+- 构建里共存已启用：`CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y`、`CONFIG_SW_COEXIST_ENABLE=y`——排除“缺共存”这一项。
+
+### 结论
+问题在手机系统对无互联网 SoftAP 的自动断开（断得过快，手动 App 步骤来不及），不是网关拒绝、不是 PoP、不是 App 配网协议逻辑错误。
+
+### App 侧本轮发现/修复
+- 已修复：`app/lib/pages/cloud_devices_page.dart` 两处 `CupertinoButton(color: activeBlue)` 蓝底蓝字不可见——Flutter 3.44.1 中普通 `CupertinoButton` 前景色取 `primaryColor`(=activeBlue)，故与蓝底同色；改为显式 `foregroundColor: CupertinoColors.white`。（`.filled` 用 `primaryContrastingColor` 故本就正常。）
+- 待处理：`app/lib/pages/provisioning_page.dart` 切到“热点兼容”时 PoP 仍是门铃默认 `doorbell1234`，网关需 `gateway1234`（现阶段需手动改）。
+- 待处理：`app/lib/prov/transport_http.dart` 用普通 `http.Client()`，未把请求绑定到热点网络（Android 有移动数据时可能走默认网/被系统判为无用而断开）。
+
+### 明天的修复方向（择一或组合）
+1. 网关加 Captive-Portal 保活（推荐，手机/App 无关）：SoftAP 上加 DNS catch-all + HTTP `/generate_204`(Android)、`/hotspot-detect.html`(Apple) 应答，让系统认为“有网”从而不自动断开；需重编重刷 COM4（注意 network_provisioning 已占用 80 端口 httpd，需要额外 URI handler/并行 DNS server）。
+2. App 内置连接热点 + 网络绑定：用插件/平台通道 `ConnectivityManager.requestNetwork`+`bindProcessToNetwork` 程序化连接 SoftAP 并保活，连上后立即驱动 protocomm；顺带修复上面 PoP 与 transport 绑定问题。
+3. 兜底手动流程：关移动数据 + 保持连接 + 尽快在“热点兼容”页把 PoP 改 `gateway1234` 后立刻下发（不稳定，仅应急）。
 
 每轮联调结束后更新本表，并在 `docs/DEVELOPMENT_PROGRESS.md` 中只写已经有证据的结论。

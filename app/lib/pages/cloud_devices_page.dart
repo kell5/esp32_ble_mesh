@@ -605,6 +605,7 @@ class _AddDevicePageState extends State<_AddDevicePage> {
           CupertinoButton(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             color: CupertinoColors.activeBlue,
+            foregroundColor: CupertinoColors.white,
             borderRadius: BorderRadius.circular(16),
             onPressed: _busy ? null : () => _claim(device.id),
             child: const Text('添加', style: TextStyle(fontSize: 14)),
@@ -658,6 +659,7 @@ class _AddDevicePageState extends State<_AddDevicePage> {
             const SizedBox(height: 10),
             CupertinoButton(
               color: CupertinoColors.activeBlue,
+              foregroundColor: CupertinoColors.white,
               onPressed: _busy ? null : _openProvisioning,
               child: const Text('蓝牙配网'),
             ),
