@@ -13,7 +13,7 @@
 ## 0. 2026-07-14 当前联调状态
 
 - 当前先完成固件和硬件 Mesh 联调，Flutter App 暂不联调；App 仍为 PR #4 合并后的版本，尚未接入 BLE Mesh 新网关的发现、设备映射与控制界面。
-- 当前串口映射：COM7 门铃；COM4、COM8 为 ESP32-S3 N16R8；COM6 为 ESP32-WROOM。COM14、COM15 存在串口/启动异常，不再作为活动端口。
+- 本轮物理验收映射：COM4、COM8 为 ESP32-S3，COM7 为 ESP32-WROOM；摄像头门铃已拔下、不参与测试。COM6 是 WROOM 的历史串口号，串口号随插拔变化，后续必须继续用芯片型号、MAC 和启动日志确认角色。COM14、COM15 存在串口/启动异常，不再作为活动端口。
 - 串口号不固定代表产品角色；COM4/COM8 可在读取芯片信息确认后分别刷成网关或普通节点，当前保持 COM4 网关、COM8 节点。
 - COM4 已确认是 ESP32-S3 N16R8，作为 Provisioner、Config Client、Generic OnOff Client 和未来 Wi-Fi/MQTT 网关。
 - COM8 已确认是 ESP32-S3 N16R8，替代无法启动应用的 COM14 完成双板联调。
@@ -23,14 +23,14 @@
 - 保留 NVS 重刷网关后，COM4 自动查询已配网节点并达到 `stage=9, addr=5`；双方 NetKey/AppKey/节点信息仍存在，未重复 Provisioning。
 - COM14 固件写入和校验成功，但应用级 NVS 始终为空；同一节点固件在 COM4 可运行，故记录为 COM14 启动/复位路径阻塞，不记录为 BLE Mesh 射频失败。
 - 网关已加入可配置 Wi-Fi STA、MQTT 自动重连、normalized/legacy topic 订阅、MQTT→BLE Generic OnOff、状态与 ACK 回传代码；固件构建成功并刷入 COM4。由于未配置 Wi-Fi/MQTT 凭据，联网、云端闭环和 30 分钟共存压力尚未验收。
-- 节点已写入“恢复已保存 OnOff 与配网阶段”的本地修改；S3 固件 836224 bytes、WROOM 固件 811424 bytes，app 分区分别剩余 46% 和 47%。
-- COM8 已刷入最新 S3 节点固件，重启后保持地址 `0x0005`、已配网状态和 `onoff=0`。
-- COM6 已由 esptool 确认为 ESP32-D0WD-V3 rev 3.1、4 MB Flash，并刷成 GPIO2/D2 的第二个 BLE Mesh Generic OnOff Server；已配网为地址 `0x0006`，重启后保持 `stage=7/onoff=1`。
+- 节点已写入“恢复已保存 OnOff 与配网阶段”的本地修改；S3 固件 836240 bytes、WROOM 固件 811424 bytes，app 分区分别剩余 46% 和 47%。
+- COM8 已刷入最新 S3 节点固件，保持地址 `0x0005` 和已配网状态；最新生产 fresh Get 为 `onoff=1`。
+- 当前 COM7 已由芯片型号、MAC 和 `onoff_server` 启动日志确认为 ESP32-D0WD-V3 rev 3.1、4 MB Flash 的 WROOM 节点；GPIO2/D2，已配网地址 `0x0006`，最新生产 fresh Get 为 `onoff=0`。
 - COM4 重启恢复后 NVS 同时保存节点 `0x0005`、`0x0006`，并查询到 `addr=6/onoff=1/stage=9`。
 - Provisioner 已增加固定组地址 `0xC000`：新节点完成 Model App Bind 后自动执行 Model Subscription Add，已保存节点在网关重启后也会补配；广播 MQTT 命令改为一次 BLE Mesh group multicast，再逐节点 Get 校验状态。单节点命令增加 in-flight 保护和有限重试。
 - 默认固件和启用 `CONFIG_FARMELY_BENCH_SELF_TEST` 的测试固件均构建通过；默认 `provisioner.bin` 约 827 KB，app 分区剩余 46%。测试固件提供 20 轮分组和 50 条定向命令的台架检查，默认关闭。
-- COM4 启动日志曾确认 `0x0005`、`0x0006` 均成功订阅 `0xC000`。随后执行台架测试时 `0x0005` 已离线，结果为分组 `0/20`、定向 `25/50`（在线的 `0x0006` 为 `25/25`）；因此双节点分组和 50 次无误控仍不能标记通过。测试后已恢复默认关闭自测的固件。
-- COM8/`0x0005` 恢复在线后重新执行真实双节点台架测试，结果为 `group=20/20 directed=50/50`，没有分组、定向或双节点在线预检失败日志；测试结束后逻辑状态恢复为 `0x0005=0`、`0x0006=1`。COM4 已重新刷回默认关闭自测的生产固件，冷启动后两个节点均重新订阅 `0xC000` 并返回 OnOff 状态。物理 WS2812/GPIO2 灯态仍需人工确认。
+- 历史首轮台架测试时 `0x0005` 离线，结果为分组 `0/20`、定向 `25/50`；COM8 恢复在线后的完整逻辑压力测试达到 `group=20/20 directed=50/50`。
+- 物理灯态慢速验收最终通过：COM4 再次得到 `group=4/4 directed=4/4`，用户在完整组控、定向隔离和恢复序列结束后确认“灯光正常”。本轮起始/恢复状态为 `0x0005=1`、`0x0006=0`；COM4 随后刷回默认关闭自测的 827552-byte 生产固件，冷启动确认两节点重新订阅 `0xC000` 并 fresh Get 返回 `(1,0)`，COM4/COM7/COM8 已释放。早一轮曾观察到 `D2常亮，48长灭`，因此仍需补多次断电重启复测，不能据一次通过宣称长期硬件稳定。
 
 ## 1. 产品目标
 
@@ -63,6 +63,11 @@ COM8 BLE Mesh 灯节点 ESP32-S3 N16R8
   ├─ BLE Mesh settings
   └─ GPIO48 WS2812
 
+COM7 BLE Mesh 灯节点 ESP32-WROOM
+  ├─ Generic OnOff Server
+  ├─ BLE Mesh settings
+  └─ GPIO2/D2
+
 ESP-WIFI-MESH
   └─ 保留为历史回归基线；代码完成、历史部分验证、正式硬件验收未完成
 
@@ -89,14 +94,14 @@ Flutter App
 
 | 角色 | 硬件 | 串口 | 当前说明 |
 |---|---|---|---|
-| 门铃 | ESP32-S3 N8R8 + OV3660 | COM7 | 实测 Flash 8 MB、PSRAM 8 MB；Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
+| 门铃 | ESP32-S3 N8R8 + OV3660 | 当前拔下（历史 COM7） | 实测 Flash 8 MB、PSRAM 8 MB；Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
 | BLE Mesh + Wi-Fi 网关 | ESP32-S3 N16R8 | COM4 | 16 MB Flash、8 MB PSRAM；Provisioner/Config/OnOff Client + Wi-Fi/MQTT bridge |
-| BLE Mesh 灯节点 | ESP32-S3 N16R8 | COM8 | 16 MB Flash、8 MB PSRAM；Generic OnOff Server；GPIO48 WS2812；已完成双板主链路 |
-| 第二 BLE Mesh 灯节点 | ESP32-WROOM | COM6 | ESP32-D0WD-V3、4 MB Flash；GPIO2/D2；已配网地址 `0x0006` |
+| BLE Mesh 灯节点 | ESP32-S3 N16R8 | COM8 | 16 MB Flash、8 MB PSRAM；Generic OnOff Server；GPIO48 WS2812；地址 `0x0005` |
+| 第二 BLE Mesh 灯节点 | ESP32-WROOM | COM7（历史 COM6） | ESP32-D0WD-V3、4 MB Flash；GPIO2/D2；地址 `0x0006` |
 | 非活动端口 | 历史板卡 | COM14、COM15 | 存在启动或下载异常，不再阻塞当前联调 |
 | Android 测试机 | MEP AN00 | ADB `AQRVUT5B11011314` | Flutter 调试安装目标 |
 
-> 当前只使用 COM7、COM4、COM8、COM6；每次刷写前仍需读取芯片信息，串口号可随插拔变化，也可通过重新刷写改变板卡角色。
+> 本轮只使用 COM4、COM7、COM8；摄像头门铃已拔下。每次刷写前仍需读取芯片型号和 MAC，并结合项目名/Mesh 地址确认角色，不能只依赖串口号。
 
 ## 5. 协议与固定接口
 
@@ -159,16 +164,16 @@ Flutter App
 - [x] 架构确认：普通灯节点使用 BLE Mesh Generic OnOff；N16R8 网关同时运行 BLE Mesh Provisioner/Client 与 Wi-Fi/MQTT。
 - [x] 门铃保持独立 Wi-Fi/MQTT/视频链路，不加入 BLE Mesh。
 - [x] 乐鑫官方示例已放入工作区作为参考，覆盖 Provisioner、Generic OnOff Server 和 Wi-Fi coexist。
-- [x] 当前硬件约束确认：COM6 WROOM 使用 GPIO2/D2，COM4/COM8 N16R8 使用 GPIO48 WS2812。
+- [x] 当前硬件约束确认：WROOM 节点使用 GPIO2/D2，COM4/COM8 ESP32-S3 使用 GPIO48 WS2812；本轮 WROOM 枚举为 COM7（历史为 COM6）。
 - [x] 提交联调计划和结果判定标准。
-- [x] COM7 N8R8 门铃固件构建和刷写成功；OV3660、Wi-Fi、MQTT 启动验证通过。
-- [ ] COM7 尚需实体按键、60 秒视频观看和云端命令 ACK 验收。
+- [x] 历史 COM7 N8R8 门铃固件构建和刷写成功；OV3660、Wi-Fi、MQTT 启动验证通过。
+- [ ] 摄像头门铃重新接入后尚需实体按键、60 秒视频观看和云端命令 ACK 验收。
 - [x] WROOM Generic OnOff Server 已完成 GPIO2、brownout-off、settings 和单元素适配。
 - [x] COM14、COM15 记录为非活动异常端口，不再继续消耗主线联调时间。
-- [x] COM6 WROOM 已完成构建、刷写、配网和 NVS 重启恢复。
+- [x] WROOM `0x0006` 已完成构建、刷写、配网和 NVS 重启恢复；本轮串口为 COM7。
 - [x] 网关已实现 `0xC000` Model Subscription Add、group multicast、状态复查和可选台架自测。
-- [x] COM8/`0x0005` 与 COM6/`0x0006` 已完成 20 轮分组和 50 次定向无误控测试，结果 `20/20`、`50/50`。
-- [ ] COM8 WS2812 与 COM6 GPIO2/D2 的物理灯态仍需人工确认。
+- [x] COM8/`0x0005` 与 WROOM/`0x0006` 已完成 20 轮分组和 50 次定向无误控测试，结果 `20/20`、`50/50`。
+- [x] COM8 GPIO48 WS2812 与 WROOM GPIO2/D2 已完成一次人工物理灯态验收：组控 `4/4`、定向隔离 `4/4`，用户确认“灯光正常”。
 - [ ] N16R8 BLE Mesh + Wi-Fi/MQTT 网关实现与共存压力验证。
 
 详细步骤、判定阈值和结果记录见 [MESH_HARDWARE_INTEGRATION_PLAN.md](MESH_HARDWARE_INTEGRATION_PLAN.md)。
@@ -213,7 +218,7 @@ Flutter App
 - [x] Flutter analyze 通过（0 issues），debug APK 构建通过。
 - [x] debug APK 已安装到已连接手机；设备图标与页面布局显示正常，已修复设备卡片底部 16px 溢出；未触发实际节点控制。
 - [x] ESP32-S3 网关构建通过。
-- [x] ESP32 节点构建通过；COM6 WROOM 当前断电，未做烧录或串口验证。
+- [x] 该阶段 ESP32 节点构建通过；当时 COM6 WROOM 断电，未做烧录或串口验证（后续已完成实物验收）。
 - [ ] 用户实机选择不同设备类型并烧录验证。
 
 详细文件映射、协议示例和测试步骤见 [DEVICE_ASSET_STATUS.md](DEVICE_ASSET_STATUS.md)。
@@ -328,7 +333,7 @@ Flutter App
 2. **不得改变现有 MQTT topic 语义**：新协议应兼容旧 `demo/cmd`。
 3. **不得给普通 Mesh 节点强制开启网关 BLE 配网**。
 4. ESP32 节点固件 app 分区余量约 1%，新增组件前先检查尺寸。
-5. WROOM brownout-off 仅用于 COM6 台架联调，不能复制到 S3 主线或量产配置。
+5. WROOM brownout-off 仅用于当前 WROOM 台架联调，不能复制到 S3 主线或量产配置。
 6. BLE 配网只支持 2.4 GHz WiFi；错误提示不要暗示 ESP32 可连接 5 GHz。
 7. 通知仅保证 App 前台和后台进程存活场景；进程被杀后不通知是当前确认需求。
 8. 不提交 `build/`、生成的 `sdkconfig.*.generated`、日志、截图和临时脚本。
@@ -336,16 +341,16 @@ Flutter App
 10. 窗帘、阀门、门锁等目前只复用 on/off 协议和板载 LED 指示，尚未实现真实电机、限位、继电器与安全保护。
 11. BLE Mesh 与 Wi-Fi 可在同一 ESP32-S3 网关共存，但共用 2.4 GHz 射频；未经 30 分钟并行和命令压力测试不得标记为稳定。
 12. COM14、COM15 仅保留历史异常记录，不再作为活动端口；不得把串口问题写成 BLE Mesh 失败。
-13. 先前台架测试只有 `0x0006` 在线，结果 `0/20`、`25/50`；COM8 恢复后双节点重测已达到 `20/20`、`50/50`。该结果只证明 Mesh 逻辑状态，不替代物理灯态观察。
+13. 先前台架测试只有 `0x0006` 在线，结果 `0/20`、`25/50`；COM8 恢复后双节点重测已达到 `20/20`、`50/50`，随后慢速物理验收达到组控 `4/4`、定向 `4/4` 并由用户确认灯态正常。早一轮固定灯态观察仍需通过多次冷启动复测排除瞬态问题。
 
 ## 10. 下一步优先级
 
-1. 人工确认 COM8 WS2812 与 COM6 GPIO2/D2 的物理灯态和测试后恢复状态。
+1. 对 COM8 WS2812 与 WROOM GPIO2/D2 做多次节点断电、网关重启后的物理恢复复测，排除早一轮 `D2常亮，48长灭` 的瞬态问题。
 2. 为 COM4 的本地 `sdkconfig` 配置 Wi-Fi/MQTT（不提交凭据），验证 MQTT→BLE→OnOff Status→ACK/reported state 闭环。
 3. 在 MQTT/BLE 命令链路中复验 COM8 的 On 状态重启恢复，确保 GPIO48、Model state 和 NVS 状态一致。
 4. 完成 Wi-Fi 重连、节点重启、网关重启和 BLE/Wi-Fi 30 分钟共存测试。
-5. COM14、COM15 暂不排障，不阻塞 COM4 + COM8 + COM6 主线。
-6. 完成 COM7 实体按键、60 秒外部视频、云端 ACK、heartbeat/LWT 和 10 分钟稳定性。
+5. COM14、COM15 暂不排障，不阻塞 COM4 + COM8 + WROOM 主线。
+6. 摄像头门铃重新接入后，重新读取串口/芯片身份，再完成实体按键、60 秒外部视频、云端 ACK、heartbeat/LWT 和 10 分钟稳定性。
 7. 检查 diff、显式暂存所需源码与文档、commit、push 并创建 PR。
 
 ### 下一阶段（已规划，见 `docs/PRODUCT_ARCHITECTURE_AND_ROADMAP.md`）
@@ -362,7 +367,7 @@ Flutter App
 
 1. 阅读本文件、`docs/DEVICE_ASSET_STATUS.md`、`docs/APP_DEVICE_ICON_PROMPTS.md` 和 `docs/SINGLE_DEVICE_ICON_PROMPTS.md`。
 2. 执行 `git status --short`、`git branch --show-current`、`git log -1 --oneline`。
-3. 先检查本文件“2026-07-14 当前联调状态”、本地 Git 状态和 COM4/COM8/COM6 当前固件，再继续节点持久化、双节点与 Wi-Fi/MQTT 验证。
+3. 先检查本文件“2026-07-14 当前联调状态”、本地 Git 状态和 COM4/COM8/WROOM 当前固件，并重新确认串口身份，再继续节点持久化、双节点与 Wi-Fi/MQTT 验证。
 4. 修改前阅读对应模块 README 和当前实现。
 5. 完成后更新本文件的阶段状态、构建结果、已知问题和下一步。
 

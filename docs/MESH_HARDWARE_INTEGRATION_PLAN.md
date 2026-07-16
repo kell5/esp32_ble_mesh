@@ -1,6 +1,6 @@
 # BLE Mesh + Wi-Fi 硬件联调计划与验收标准
 
-> 最近更新：2026-07-13  
+> 最近更新：2026-07-14
 > 目的：在刷写设备前固定硬件映射、目标架构、执行顺序、结果判定和记录格式。  
 > 本文中的“通过”必须有构建输出、串口日志和可观察结果支撑；仅编译成功不等于无线 Mesh 联调成功。
 
@@ -8,17 +8,19 @@
 
 | 角色 | 硬件 | 串口 | 灯/外设 | 本轮约束 |
 |---|---|---|---|---|
-| 门铃 | ESP32-S3 N8R8 + 摄像头 | COM7 | 摄像头、门铃按键 | 实测 Flash 8 MB、PSRAM 8 MB；保持 Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
+| 门铃 | ESP32-S3 N8R8 + 摄像头 | 当前拔下（历史 COM7） | 摄像头、门铃按键 | 实测 Flash 8 MB、PSRAM 8 MB；保持 Wi-Fi/MQTT/MJPEG，不加入 BLE Mesh |
 | BLE Mesh 网关 | ESP32-S3 N16R8 | COM4 | GPIO48 板载 WS2812 RGB | 已实测 16 MB Flash、8 MB PSRAM；Provisioner/Config Client/Generic OnOff Client；Wi-Fi/MQTT bridge 已实现但尚未联网验收 |
 | BLE Mesh 灯节点 A | ESP32-S3 N16R8 | COM8 | GPIO48 板载 WS2812 RGB | 已完成 Provisioning、Config 和 Generic OnOff 实物链路 |
-| BLE Mesh 灯节点 B | ESP32-WROOM | COM6 | D2 板载 LED，GPIO2 | 2026-07-14 实测 ESP32-D0WD-V3、4 MB Flash；已配网为第二个 Generic OnOff Server |
+| BLE Mesh 灯节点 B | ESP32-WROOM | COM7（历史 COM6） | D2/GPIO2 | 2026-07-14 以芯片、MAC、项目名和 Mesh 地址确认；地址 `0x0006` |
 | 非活动端口 | 历史板卡 | COM14、COM15 | 不纳入当前映射 | 两个串口/板卡存在启动或下载异常，不再阻塞主线 |
 
-当前固定映射为 COM7 门铃、COM4/COM8 N16R8、COM6 WROOM。串口号不等于永久产品角色；允许在确认芯片型号后把 COM4/COM8 重新刷成网关或普通节点，但每次刷写前必须重新读取芯片信息。
+本轮固定映射为 COM4 网关、COM8 S3 节点 `0x0005`、COM7 WROOM
+节点 `0x0006`；摄像头门铃已拔下。串口号不等于永久产品角色，每次
+刷写前必须重新读取芯片型号和 MAC，并结合固件项目名、Mesh 地址确认。
 
 ### 1.1 WROOM 供电告警处理边界
 
-- ESP32-WROOM 专用构建设置 `CONFIG_ESP_BROWNOUT_DET=n`，当前目标改为 COM6。
+- ESP32-WROOM 专用构建设置 `CONFIG_ESP_BROWNOUT_DET=n`，本轮目标为 COM7（历史为 COM6）。
 - 关闭 brownout 只是不再触发欠压复位，不会改善供电质量。
 - 该配置不能作为量产默认值；欠压时仍可能发生随机重启、异常执行或 Flash 写入损坏。
 - 验收记录必须保留“brownout 已关闭”的风险说明；量产前应更换稳定电源、USB 线或供电设计并恢复 brownout 保护。
@@ -91,7 +93,7 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 2. 枚举串口，读取 COM7、COM4、COM8、COM6 的芯片型号、Flash、PSRAM，不凭端口号猜测硬件。
 3. 保存现有固件启动日志，确认当前故障与功能基线。
 
-### 阶段 1：COM7 门铃基线
+### 阶段 1：历史 COM7 门铃基线（当前已拔下）
 
 1. 按 ESP32-S3 N8R8 配置构建门铃固件；`camera_stream/sdkconfig.defaults` 保持 8 MB Flash 配置。
 2. 刷写 COM7 并监控启动。
@@ -122,7 +124,7 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 
 ## 4. 结果判定标准
 
-### 4.1 COM7 门铃
+### 4.1 历史 COM7 门铃
 
 | 验收项 | 通过标准 |
 |---|---|
@@ -178,5 +180,6 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8/COM6 双节点 | 双节点记录与网关重启恢复 | 部分通过 | 网关 NVS 同时包含 `pn/0005`、`pn/0006` 和持久化 `nodes`；重启查询后达到 `farmely_mesh:stage=9, addr=6, onoff=1`。已证明两个节点地址不重复，分组地址和 50 次定向无误控尚未测试 |
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + 已保存双节点 | `0xC000` 组订阅、group multicast、20 轮分组/50 条定向自测 | 未通过 | 默认和自测固件均构建通过，app 分区剩余 46%；启动日志曾确认 `0x0005`、`0x0006` 订阅 `0xC000`。正式自测时 `0x0005` 离线，分组 `0/20`、定向 `25/50`，其中在线 `0x0006` 的 25 条定向命令均成功。需恢复 `0x0005` 在线后重测，不能记录为分组或 50 条无误控通过 |
 | 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8/`0x0005` + COM6/`0x0006` | 双节点在线、`0xC000` group multicast、20 轮分组、50 条定向及非目标复查、状态恢复、生产固件恢复 | 通过（逻辑状态） | COM8 恢复在线后真实台架结果为 `group=20/20 directed=50/50`，没有分组、定向或在线预检失败日志；结束状态恢复为 `0x0005=0`、`0x0006=1`。COM4 随后刷回默认关闭自测的 827552-byte 生产固件，冷启动确认 Provisioner 初始化且两节点重新订阅 `0xC000`。COM4/COM6/COM8 均已释放，COM7 未打开。物理 WS2812/GPIO2 灯态、MQTT/cloud 与共存压力仍未验收 |
+| 2026-07-14 | 本轮 BLE Mesh 分支 | COM4 网关 + COM8/`0x0005` + COM7/`0x0006` | 慢速组控、定向物理隔离、节点回调、状态恢复、生产固件恢复 | 通过（一次人工物理验收） | COM4 结果 `group=4/4 directed=4/4`；用户在完整序列结束后确认“灯光正常”。COM7 同步记录到交替 `onoff 0x00/0x01` 的 Generic Server state-change callback。结束恢复 `0x0005=1`、`0x0006=0`；COM4 刷回 827552-byte 生产镜像并校验 hash，冷启动重新订阅两节点、fresh Get `(1,0)`，无临时自测输出，COM4/COM7/COM8 均已释放。早一轮曾观察 `D2常亮，48长灭`，仍需多次断电/冷启动复测后才能声明长期稳定 |
 
 每轮联调结束后更新本表，并在 `docs/DEVELOPMENT_PROGRESS.md` 中只写已经有证据的结论。

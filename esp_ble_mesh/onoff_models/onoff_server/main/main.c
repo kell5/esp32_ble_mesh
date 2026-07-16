@@ -154,7 +154,7 @@ static void prov_complete(uint16_t net_idx, uint16_t addr, uint8_t flags, uint32
 {
     ESP_LOGI(TAG, "net_idx: 0x%04x, addr: 0x%04x", net_idx, addr);
     ESP_LOGI(TAG, "flags: 0x%02x, iv_index: 0x%08" PRIx32, flags, iv_index);
-    board_led_operation(LED_G, LED_OFF);
+    board_led_operation(LED_G, onoff_server_0.state.onoff);
 }
 
 static void example_change_led_state(esp_ble_mesh_model_t *model,
@@ -237,7 +237,8 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
         ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT");
         prov_complete(param->node_prov_complete.net_idx, param->node_prov_complete.addr,
             param->node_prov_complete.flags, param->node_prov_complete.iv_index);
-        farmely_store_node_state(5, param->node_prov_complete.addr, LED_OFF);
+        farmely_store_node_state(5, param->node_prov_complete.addr,
+                                 onoff_server_0.state.onoff);
         break;
     case ESP_BLE_MESH_NODE_PROV_RESET_EVT:
         ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_RESET_EVT");
