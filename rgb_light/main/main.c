@@ -64,9 +64,5 @@ void app_main(void)
     }
 
     ESP_ERROR_CHECK(app_wifi_connect());
-
-    /* Running image works (WiFi up) -> commit it so OTA rollback keeps it. */
-    esp_ota_mark_app_valid_cancel_rollback();
-
     ESP_ERROR_CHECK(app_mqtt_start());
 }

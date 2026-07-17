@@ -213,6 +213,84 @@ class OtaTest(unittest.TestCase):
         self.assertEqual(progress.status_code, 200, progress.text)
         self.assertEqual(progress.json()["status"], "success")
 
+    def test_mqtt_ota_progress_updates_status(self) -> None:
+        self._register_device("node-mqtt-progress")
+        self._register_firmware()
+        self._create_rollout()
+        dispatched = self._check("node-mqtt-progress")
+        ota_msg_id = dispatched["update"]["message_id"]
+
+        self.app.state.mqtt_bridge.ingest(
+            "farmely/light/node-mqtt-progress/up/ota",
+            json.dumps(
+                {
+                    "v": 1,
+                    "msg_id": "ota-progress-1",
+                    "type": "ota",
+                    "data": {
+                        "status": "downloading",
+                        "fw_version": "1.1.0",
+                        "ota_msg_id": ota_msg_id,
+                    },
+                }
+            ).encode(),
+        )
+        updates = self.client.get(
+            "/api/v1/devices/node-mqtt-progress/ota/updates", headers=self.headers
+        )
+        self.assertEqual(updates.status_code, 200, updates.text)
+        self.assertEqual(updates.json()[0]["status"], "downloading")
+
+        self.app.state.mqtt_bridge.ingest(
+            "farmely/light/node-mqtt-progress/up/ota",
+            json.dumps(
+                {
+                    "v": 1,
+                    "msg_id": "ota-progress-2",
+                    "type": "ota",
+                    "data": {
+                        "status": "success",
+                        "fw_version": "1.1.0",
+                        "ota_msg_id": ota_msg_id,
+                    },
+                }
+            ).encode(),
+        )
+        updates = self.client.get(
+            "/api/v1/devices/node-mqtt-progress/ota/updates", headers=self.headers
+        )
+        self.assertEqual(updates.status_code, 200, updates.text)
+        self.assertEqual(updates.json()[0]["status"], "success")
+
+    def test_version_report_marks_dispatched_target_success(self) -> None:
+        self._register_device("node-version-success")
+        self._register_firmware()
+        self._create_rollout()
+        self._check("node-version-success")
+
+        self.app.state.mqtt_bridge.ingest(
+            "farmely/light/node-version-success/up/status",
+            json.dumps(
+                {
+                    "v": 1,
+                    "msg_id": "version-success-1",
+                    "type": "status",
+                    "data": {
+                        "online": True,
+                        "type": "light_bulb",
+                        "product_id": "bulb",
+                        "hw_version": "rev-a",
+                        "fw_version": "1.1.0",
+                    },
+                }
+            ).encode(),
+        )
+        updates = self.client.get(
+            "/api/v1/devices/node-version-success/ota/updates", headers=self.headers
+        )
+        self.assertEqual(updates.status_code, 200, updates.text)
+        self.assertEqual(updates.json()[0]["status"], "success")
+
     def test_progress_without_dispatch_is_404(self) -> None:
         self._register_device("node-empty")
         response = self.client.post(

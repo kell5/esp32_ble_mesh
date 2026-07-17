@@ -292,9 +292,11 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 
 ### OTA 端到端 + RGB 灯（2026-07-17）
 - 新增 `rgb_light/` 固件工程（ESP32-S3 N16R8，板载 WS2812/GPIO48）：BLE 配网（前缀 Light-，PoP light1234）、BOOT 长按 3 秒重配、MQTT 上报 office/light/node/<id>/status（App 本地发现）与 farmely/light/<id>/up/status（云端，含 product_id=farmely-rgb-light / hw_version=s3-n16r8 / fw_version）、订阅 down/cmd 与 down/ota。
-- OTA 客户端：收到 down/ota 里的 url 后 esp_https_ota 下载并重启（分区表 ota_0/ota_1 各 6MB，`esp_ota_mark_app_valid_cancel_rollback` 在 WiFi 连接成功后提交镜像）。
+- OTA 客户端：收到 down/ota 里的 url/sha256/fw_version/msg_id 后 esp_https_ota 下载；下载流式计算 sha256，不匹配则 abort 并通过 `farmely/light/<id>/up/ota` 上报 failed；匹配后写入 OTA 分区并重启（分区表 ota_0/ota_1 各 6MB）。
+- 回滚确认：已启用 bootloader app rollback；新固件启动后先连 WiFi/MQTT、发布状态与 OTA success，再调用 `esp_ota_mark_app_valid_cancel_rollback()`，避免 WiFi 刚连上就过早确认镜像。
+- 云端闭环：MQTT bridge 识别 `up/ota` 的 downloading/success/failed 并写入 ota_updates；设备上报目标 fw_version 时也会把对应 pending 记录标记 success。新增单测覆盖 MQTT OTA 进度与版本上报成功确认。
 - 版本：v1.0.0 仅开关（sdkcfg-nocolor 构建），v1.1.0 支持 RGB（cmd: "color:#RRGGBB" 或 JSON {"color":"#RRGGBB"}）。
 - 固件托管：服务器 nginx `/www/wwwroot/114.55.208.72/firmware/`，HTTP 直链 http://114.55.208.72/firmware/rgb_light_v11.bin（站点 https 重定向对 /firmware/ 路径豁免）。
 - 云端已注册 firmware fw-9103b97c…（1.1.0）+ rollout 100%：设备上报 1.0.0 后云自动下发 OTA。
 - App：MeshDevice 新增 colorHex；灯详情页对上报 color 的设备显示九宫格色板，发布 color:#RRGGBB 到 office/light/node/<id>/cmd。
-- 说明：设备端暂未校验 sha256（esp_https_ota 校验镜像头与分区），后续可加。
+- 验证：云端 `python -m unittest discover -s tests -v` 53 项通过，`ruff check src tests` 通过。当前机器 ESP-IDF 环境导出失败（VS Code 扩展 export.ps1 指向缺失的 `G:\tools\idf.py`），因此 rgb_light 固件编译与真实板 OTA 仍需明天在可用 IDF 环境/实机上继续验证。

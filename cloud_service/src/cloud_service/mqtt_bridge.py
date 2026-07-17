@@ -11,7 +11,7 @@ from pydantic import JsonValue
 
 from .config import Settings
 from .models import FirmwareResponse
-from .storage import DeviceStore
+from .storage import DeviceNotFoundError, DeviceStore, OtaUpdateNotFoundError
 
 FARMELY_ROOT = "farmely"
 FARMELY_UP_FILTER = f"{FARMELY_ROOT}/+/+/up/+"
@@ -281,6 +281,10 @@ class MqttBridge:
             self._ingest_farmely_reported(device_class, device_id, data, message_id)
             return True
 
+        if channel == "ota" or message_type == "ota":
+            self._ingest_farmely_ota(device_class, device_id, data, message_id)
+            return True
+
         return True
 
     @staticmethod
@@ -375,6 +379,38 @@ class MqttBridge:
             offline_reason=None,
         )
         self._store.record_event(device_id, event_value, reported, message_id=message_id)
+
+    def _ingest_farmely_ota(
+        self,
+        device_class: str,
+        device_id: str,
+        data: dict[str, JsonValue],
+        message_id: str | None,
+    ) -> None:
+        status = data.get("status", data.get("ota_status"))
+        if status not in {"downloading", "success", "failed"}:
+            return
+        fw_value = data.get("fw_version")
+        fw_version = fw_value if isinstance(fw_value, str) and fw_value else None
+        ota_msg_value = data.get("ota_msg_id", data.get("message_id"))
+        ota_msg_id = ota_msg_value if isinstance(ota_msg_value, str) and ota_msg_value else message_id
+        try:
+            self._store.record_ota_result(device_id, str(status), fw_version, ota_msg_id)
+        except (DeviceNotFoundError, OtaUpdateNotFoundError):
+            return
+        reported: dict[str, JsonValue] = {
+            "type": "light_bulb" if device_class == "light" else device_class,
+            "online": True,
+            "ota_status": str(status),
+        }
+        if fw_version is not None:
+            reported["fw_version"] = fw_version
+        self._apply_reported(
+            device_id,
+            reported,
+            message_id=message_id,
+            offline_reason=None,
+        )
 
     def _ingest_node(self, node_id: str, document: dict) -> None:
         device_type = document.get("type")

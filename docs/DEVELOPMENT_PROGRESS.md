@@ -241,7 +241,7 @@ Flutter App
 - [x] 部署到自有服务器：`Dockerfile` + `docker-compose.yml`（容器仅监听 `127.0.0.1:8000`），Nginx 反代 `https://lk-mcu.online/cloud/` 复用现有 Let's Encrypt 证书，已上线连真实 broker。
 - [x] Ruff 通过；28 个测试通过（含账号鉴权与隔离、门铃事件）。
 - [ ] 生产 broker ACL、凭据轮换；账号体系生产化（token 过期/刷新、邮箱验证、限流）。
-- [ ] 固件 OTA、版本管理、灰度与回滚。
+- [ ] 固件 OTA、版本管理、灰度与回滚（服务端与 `rgb_light` 直连 OTA 闭环代码已完成：sha256 校验、MQTT 进度、版本成功确认、回滚确认点后移；云端 53 项测试通过，固件编译/实机 OTA 待 IDF 环境恢复后验证）。
 - [ ] 门铃快照/媒体存储与索引。
 - [ ] 自动化增强：时间/多条件触发、延时与冷却。
 

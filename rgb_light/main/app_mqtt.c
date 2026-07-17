@@ -11,6 +11,7 @@
 #include <time.h>
 #include "mqtt_client.h"
 #include "esp_app_desc.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -22,6 +23,7 @@ static esp_mqtt_client_handle_t s_client;
 static char s_topic_status[96];    /* office/light/node/<id>/status (retained, legacy) */
 static char s_topic_cmd[96];       /* office/light/node/<id>/cmd (legacy) */
 static char s_topic_up_status[96]; /* farmely/light/<id>/up/status */
+static char s_topic_up_ota[96];    /* farmely/light/<id>/up/ota */
 static char s_topic_down_cmd[96];  /* farmely/light/<id>/down/cmd */
 static char s_topic_down_ota[96];  /* farmely/light/<id>/down/ota */
 static char s_lwt_payload[256];
@@ -51,9 +53,9 @@ static void unix_ts_s(int64_t *ts)
 static const char *caps_json(void)
 {
 #ifdef CONFIG_EXAMPLE_ENABLE_COLOR
-    return "[\"on_off\",\"color\",\"system.fw_version\",\"system.online\"]";
+    return "[\"on_off\",\"color\",\"system.fw_version\",\"system.online\",\"system.ota\"]";
 #else
-    return "[\"on_off\",\"system.fw_version\",\"system.online\"]";
+    return "[\"on_off\",\"system.fw_version\",\"system.online\",\"system.ota\"]";
 #endif
 }
 
@@ -85,6 +87,30 @@ static void publish_status(void)
              msg_id, ts, on ? "true" : "false", on ? "on" : "off", color,
              CONFIG_EXAMPLE_PRODUCT_ID, CONFIG_EXAMPLE_HW_VERSION, fw, caps_json());
     esp_mqtt_client_publish(s_client, s_topic_up_status, payload, 0, 1, 1);
+}
+
+static void publish_ota_status(const char *status,
+                               const char *fw_version,
+                               const char *ota_msg_id,
+                               const char *detail)
+{
+    if (s_client == NULL || status == NULL) {
+        return;
+    }
+    char msg_id[64];
+    message_id(msg_id, sizeof(msg_id));
+    int64_t ts = 0;
+    unix_ts_s(&ts);
+    const char *fw = fw_version ? fw_version : esp_app_get_description()->version;
+    const char *ota_msg = ota_msg_id ? ota_msg_id : "";
+    const char *detail_text = detail ? detail : "";
+    char payload[512];
+    snprintf(payload, sizeof(payload),
+             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"ota\","
+             "\"data\":{\"status\":\"%s\",\"fw_version\":\"%s\","
+             "\"ota_msg_id\":\"%s\",\"detail\":\"%s\"}}",
+             msg_id, ts, status, fw, ota_msg, detail_text);
+    esp_mqtt_client_publish(s_client, s_topic_up_ota, payload, 0, 1, 0);
 }
 
 static bool parse_hex_color(const char *text, uint8_t *r, uint8_t *g, uint8_t *b)
@@ -170,7 +196,17 @@ static void handle_ota(const char *payload)
         ESP_LOGW(TAG, "OTA command without url");
         return;
     }
-    app_ota_start(url);
+    char sha256[65] = {0};
+    char fw_version[64] = {0};
+    char ota_msg_id[128] = {0};
+    json_string(payload, "sha256", sha256, sizeof(sha256));
+    json_string(payload, "fw_version", fw_version, sizeof(fw_version));
+    json_string(payload, "msg_id", ota_msg_id, sizeof(ota_msg_id));
+    esp_err_t err = app_ota_start(url, sha256, fw_version, ota_msg_id);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "failed to start OTA: %s", esp_err_to_name(err));
+        publish_ota_status("failed", fw_version, ota_msg_id, esp_err_to_name(err));
+    }
 }
 
 static void heartbeat_cb(void *arg)
@@ -193,6 +229,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         esp_mqtt_client_subscribe(s_client, s_topic_down_cmd, 1);
         esp_mqtt_client_subscribe(s_client, s_topic_down_ota, 1);
         publish_status();
+        app_ota_confirm_running();
         if (s_heartbeat_timer) {
             esp_timer_start_periodic(s_heartbeat_timer, 60 * 1000000ULL);
         }
@@ -231,6 +268,7 @@ esp_err_t app_mqtt_start(void)
     snprintf(s_topic_status, sizeof(s_topic_status), "office/light/node/%s/status", devid);
     snprintf(s_topic_cmd, sizeof(s_topic_cmd), "office/light/node/%s/cmd", devid);
     snprintf(s_topic_up_status, sizeof(s_topic_up_status), "farmely/light/%s/up/status", devid);
+    snprintf(s_topic_up_ota, sizeof(s_topic_up_ota), "farmely/light/%s/up/ota", devid);
     snprintf(s_topic_down_cmd, sizeof(s_topic_down_cmd), "farmely/light/%s/down/cmd", devid);
     snprintf(s_topic_down_ota, sizeof(s_topic_down_ota), "farmely/light/%s/down/ota", devid);
     if (s_boot_nonce == 0) {
@@ -250,6 +288,7 @@ esp_err_t app_mqtt_start(void)
             return timer_err;
         }
     }
+    app_ota_set_status_callback(publish_ota_status);
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = CONFIG_EXAMPLE_MQTT_BROKER_URI,

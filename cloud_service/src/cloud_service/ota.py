@@ -4,7 +4,7 @@ import uuid
 from typing import Callable
 
 from .models import FirmwareResponse, OtaCheckResponse
-from .storage import DeviceNotFoundError, DeviceStore
+from .storage import DeviceNotFoundError, DeviceStore, OtaUpdateNotFoundError
 
 PublishOta = Callable[[str, str, FirmwareResponse, str], bool]
 
@@ -81,4 +81,8 @@ class OtaEngine:
         hw_version: str,
         fw_version: str,
     ) -> None:
+        try:
+            self._store.record_ota_result(device_id, "success", fw_version)
+        except (DeviceNotFoundError, OtaUpdateNotFoundError):
+            pass
         self.evaluate(device_id, product_id, hw_version, fw_version)
