@@ -1,24 +1,42 @@
 menu "Farmely BLE Mesh gateway"
 
 config FARMELY_WIFI_SSID
-    string "Wi-Fi SSID"
+    string "Wi-Fi SSID (compile-time override; empty = SoftAP provisioning)"
     default ""
+    help
+        Leave empty (default) to provision Wi-Fi at runtime from the phone app
+        over SoftAP. Set a value only for lab/bench builds that must connect to
+        a fixed AP without provisioning.
 
 config FARMELY_WIFI_PASSWORD
-    string "Wi-Fi password"
+    string "Wi-Fi password (compile-time override)"
     default ""
+
+config FARMELY_PROV_SOFTAP_PREFIX
+    string "SoftAP provisioning name prefix"
+    default "Gateway-"
+    help
+        The SoftAP name is built as "<prefix><last 3 STA MAC bytes>", e.g.
+        Gateway-D31548. The app matches this prefix to pick the gateway PoP.
+
+config FARMELY_PROV_POP
+    string "Provisioning proof-of-possession"
+    default "gateway1234"
+    help
+        Security1 proof-of-possession. The app must use the same value
+        (AppConfig.gatewayProvPop) when provisioning the gateway.
 
 config FARMELY_MQTT_URI
     string "MQTT broker URI"
-    default ""
+    default "mqtt://121.40.131.194:1883"
 
 config FARMELY_MQTT_USERNAME
     string "MQTT username"
-    default ""
+    default "yskj"
 
 config FARMELY_MQTT_PASSWORD
     string "MQTT password"
-    default ""
+    default "yskj@123"
 
 config FARMELY_BENCH_SELF_TEST
     bool "Run BLE Mesh group and directed-control bench test"

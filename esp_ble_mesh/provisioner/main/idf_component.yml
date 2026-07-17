@@ -5,3 +5,5 @@ dependencies:
     version: "1.7.19~2"
   espressif/mqtt:
     version: "1.0.0"
+  espressif/network_provisioning:
+    version: "^1.2.4"

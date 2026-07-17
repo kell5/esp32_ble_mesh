@@ -10,3 +10,14 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_SW_COEXIST_ENABLE=y
+
+# BLE Mesh + Wi-Fi SoftAP provisioning exceed the 1.5MB single-app-large
+# partition, so use a custom table with a 3MB factory app (16MB flash).
+# nvs (0x9000) and factory (0x10000) offsets are unchanged to preserve
+# persisted BLE Mesh node state across the repartition.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# Runtime SoftAP Wi-Fi provisioning (Security1 x25519 + PoP), matches app.
+CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y

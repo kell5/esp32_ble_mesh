@@ -1,9 +1,12 @@
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <time.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -11,8 +14,12 @@
 #include "esp_wifi.h"
 #include "cJSON.h"
 #include "mqtt_client.h"
+#include "network_provisioning/manager.h"
+#include "network_provisioning/scheme_softap.h"
+#include "esp_http_server.h"
 
 #include "gateway_bridge.h"
+#include "captive_portal.h"
 
 #define TAG "FARMELY_BRIDGE"
 
@@ -28,6 +35,7 @@ static uint32_t s_boot_nonce;
 static uint32_t s_sequence;
 static bool s_mqtt_started;
 static bool s_mqtt_connected;
+static httpd_handle_t s_prov_httpd;
 
 static int64_t unix_timestamp(void)
 {
@@ -252,7 +260,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 {
     (void)arg;
     (void)event_data;
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
+        farmely_captive_portal_configure_dhcp_dns();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
@@ -263,6 +273,120 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+/* SoftAP provisioning name: "<prefix><last 3 STA MAC bytes>", e.g. Gateway-D31548. */
+static void build_prov_service_name(char *out, size_t max)
+{
+    uint8_t mac[6] = {0};
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    snprintf(out, max, "%s%02X%02X%02X",
+             CONFIG_FARMELY_PROV_SOFTAP_PREFIX, mac[3], mac[4], mac[5]);
+}
+
+/* Custom provisioning endpoint returning the gateway identity + a claim code,
+ * mirroring the doorbell's "custom-data" endpoint so the app binds uniformly. */
+static esp_err_t prov_custom_data_handler(uint32_t session_id, const uint8_t *inbuf,
+                                          ssize_t inlen, uint8_t **outbuf,
+                                          ssize_t *outlen, void *priv_data)
+{
+    (void)session_id; (void)inbuf; (void)inlen; (void)priv_data;
+    uint32_t claim_code = esp_random();
+    char resp[128];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"device_id\":\"%s\",\"claim_code\":\"%08" PRIx32 "\","
+                     "\"type\":\"gateway\"}",
+                     s_gateway_id, claim_code);
+    if (n < 0 || n >= (int)sizeof(resp)) {
+        return ESP_ERR_NO_MEM;
+    }
+    *outbuf = malloc(n + 1);
+    if (*outbuf == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(*outbuf, resp, n + 1);
+    *outlen = n + 1;
+    return ESP_OK;
+}
+
+static void prov_event_handler(void *arg, esp_event_base_t event_base,
+                               int32_t event_id, void *event_data)
+{
+    (void)arg;
+    if (event_base != NETWORK_PROV_EVENT) {
+        return;
+    }
+    switch (event_id) {
+    case NETWORK_PROV_START:
+        ESP_LOGI(TAG, "SoftAP provisioning started");
+        break;
+    case NETWORK_PROV_WIFI_CRED_RECV: {
+        wifi_sta_config_t *cfg = (wifi_sta_config_t *)event_data;
+        ESP_LOGI(TAG, "received Wi-Fi credentials: SSID=%s",
+                 (const char *)cfg->ssid);
+        break;
+    }
+    case NETWORK_PROV_WIFI_CRED_FAIL:
+        ESP_LOGW(TAG, "provisioning failed, retry from app");
+        break;
+    case NETWORK_PROV_WIFI_CRED_SUCCESS:
+        ESP_LOGI(TAG, "provisioning successful");
+        break;
+    case NETWORK_PROV_END:
+        ESP_LOGI(TAG, "provisioning finished");
+        break;
+    default:
+        break;
+    }
+}
+
+/* Runs the network_provisioning manager off the caller's stack so app_main and
+ * BLE Mesh keep running. SoftAP keeps BLE fully available for BLE Mesh. */
+static void gateway_wifi_task(void *arg)
+{
+    (void)arg;
+    network_prov_mgr_config_t prov_cfg = {
+        .scheme = network_prov_scheme_softap,
+        .scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE,
+    };
+    if (network_prov_mgr_init(prov_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "network_prov_mgr_init failed");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    bool provisioned = false;
+    network_prov_mgr_is_wifi_provisioned(&provisioned);
+
+    if (!provisioned) {
+        char service_name[32];
+        build_prov_service_name(service_name, sizeof(service_name));
+        ESP_LOGI(TAG, "not provisioned -> SoftAP \"%s\" at 192.168.4.1 "
+                      "(connect phone, then provision from app)", service_name);
+        /* Share a captive-portal keepalive HTTP server with protocomm so the
+         * phone keeps the (internet-less) SoftAP connected long enough to
+         * provision. Must be set before start_provisioning(). */
+        if (farmely_captive_portal_start(&s_prov_httpd) == ESP_OK) {
+            network_prov_scheme_softap_set_httpd_handle(s_prov_httpd);
+        }
+
+        ESP_ERROR_CHECK(network_prov_mgr_endpoint_create("custom-data"));
+        ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
+            NETWORK_PROV_SECURITY_1, (const void *)CONFIG_FARMELY_PROV_POP,
+            service_name, NULL));
+        ESP_ERROR_CHECK(network_prov_mgr_endpoint_register(
+            "custom-data", prov_custom_data_handler, NULL));
+        network_prov_mgr_wait();
+        farmely_captive_portal_stop(s_prov_httpd);
+        s_prov_httpd = NULL;
+        network_prov_mgr_deinit();
+    } else {
+        ESP_LOGI(TAG, "already provisioned -> connecting with stored Wi-Fi");
+        network_prov_mgr_deinit();
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+        ESP_ERROR_CHECK(esp_wifi_start());
+    }
+    vTaskDelete(NULL);
+}
+
 esp_err_t farmely_gateway_bridge_start(const char *gateway_id,
                                        farmely_bridge_command_handler_t command_handler,
                                        farmely_bridge_sync_handler_t sync_handler,
@@ -271,11 +395,6 @@ esp_err_t farmely_gateway_bridge_start(const char *gateway_id,
     if (!gateway_id || !gateway_id[0] || !command_handler) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (CONFIG_FARMELY_WIFI_SSID[0] == '\0') {
-        ESP_LOGW(TAG, "Wi-Fi is not configured; BLE Mesh remains active");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
     strlcpy(s_gateway_id, gateway_id, sizeof(s_gateway_id));
     s_command_handler = command_handler;
     s_sync_handler = sync_handler;
@@ -288,6 +407,7 @@ esp_err_t farmely_gateway_bridge_start(const char *gateway_id,
         return err;
     }
     esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t wifi_init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wifi_init));
@@ -295,19 +415,32 @@ esp_err_t farmely_gateway_bridge_start(const char *gateway_id,
                                                wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                                wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(NETWORK_PROV_EVENT, ESP_EVENT_ANY_ID,
+                                               prov_event_handler, NULL));
 
-    wifi_config_t wifi_config = {0};
-    strlcpy((char *)wifi_config.sta.ssid, CONFIG_FARMELY_WIFI_SSID,
-            sizeof(wifi_config.sta.ssid));
-    strlcpy((char *)wifi_config.sta.password, CONFIG_FARMELY_WIFI_PASSWORD,
-            sizeof(wifi_config.sta.password));
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    wifi_config.sta.pmf_cfg.capable = true;
-    wifi_config.sta.pmf_cfg.required = false;
+    /* Optional compile-time override: if a Wi-Fi SSID is baked in, connect
+     * directly and skip runtime provisioning (kept for lab/bench builds). */
+    if (CONFIG_FARMELY_WIFI_SSID[0] != '\0') {
+        wifi_config_t wifi_config = {0};
+        strlcpy((char *)wifi_config.sta.ssid, CONFIG_FARMELY_WIFI_SSID,
+                sizeof(wifi_config.sta.ssid));
+        strlcpy((char *)wifi_config.sta.password, CONFIG_FARMELY_WIFI_PASSWORD,
+                sizeof(wifi_config.sta.password));
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        wifi_config.sta.pmf_cfg.capable = true;
+        wifi_config.sta.pmf_cfg.required = false;
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        return esp_wifi_start();
+    }
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    return esp_wifi_start();
+    /* Runtime SoftAP provisioning: the phone app provides Wi-Fi credentials.
+     * BLE stays entirely with BLE Mesh; provisioning uses the Wi-Fi radio. */
+    if (xTaskCreate(gateway_wifi_task, "gw_wifi", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "failed to start gateway Wi-Fi provisioning task");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 void farmely_gateway_bridge_publish_node_status(const char *device_id,

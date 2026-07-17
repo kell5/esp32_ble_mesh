@@ -259,7 +259,10 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
           }
           _log('设备正在连接 WiFi…（${second}s）');
         } catch (_) {
-          if (_transport == _ProvisioningTransport.ble && second >= 3) {
+          // Both BLE and the gateway SoftAP tear down the provisioning
+          // transport once credentials are saved, so a failing status read
+          // after a few seconds means the device accepted the config.
+          if (second >= 3) {
             _log('设备已保存配置并退出配网模式，请稍后在首页确认上线。');
             if (mounted) await _showDone();
             return;
@@ -320,6 +323,20 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
                 setState(() {
                   _transport = value;
                   _status = '';
+                  if (value == _ProvisioningTransport.softAp) {
+                    // SoftAP is the gateway provisioning flow.
+                    _pop.text = AppConfig.gatewayProvPop;
+                    _host.text = AppConfig.provHost;
+                  } else {
+                    final device = _device;
+                    _pop.text =
+                        (device != null &&
+                            _deviceName(
+                              device,
+                            ).startsWith(AppConfig.gatewayProvPrefix))
+                        ? AppConfig.gatewayProvPop
+                        : AppConfig.doorbellProvPop;
+                  }
                 });
               },
             ),
@@ -446,7 +463,11 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
         color: CupertinoColors.systemGrey6,
         borderRadius: BorderRadius.circular(14),
       ),
-      child: const Text('兼容旧固件：先在手机 WiFi 设置中连接设备热点，再回到这里下发 WiFi。新固件请优先使用蓝牙搜索。'),
+      child: const Text(
+        '网关配网：先在手机「WiFi 设置」里连接网关热点 Gateway-XXXXXX（无需密码），'
+        '若提示无法上网请选择「保持连接」，然后回到这里下发 WiFi。'
+        '配网口令已自动填为网关口令，无需修改。',
+      ),
     );
   }
 
