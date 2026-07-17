@@ -365,7 +365,7 @@ static void gateway_wifi_task(void *arg)
          * phone keeps the (internet-less) SoftAP connected long enough to
          * provision. Must be set before start_provisioning(). */
         if (farmely_captive_portal_start(&s_prov_httpd) == ESP_OK) {
-            network_prov_scheme_softap_set_httpd_handle(s_prov_httpd);
+            network_prov_scheme_softap_set_httpd_handle(&s_prov_httpd);
         }
 
         ESP_ERROR_CHECK(network_prov_mgr_endpoint_create("custom-data"));
