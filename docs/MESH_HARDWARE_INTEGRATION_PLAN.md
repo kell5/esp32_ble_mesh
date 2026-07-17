@@ -209,3 +209,45 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 3. 兜底手动流程：关移动数据 + 保持连接 + 尽快在“热点兼容”页把 PoP 改 `gateway1234` 后立刻下发（不稳定，仅应急）。
 
 每轮联调结束后更新本表，并在 `docs/DEVELOPMENT_PROGRESS.md` 中只写已经有证据的结论。
+
+
+## SoftAP App 配网调查（2026-07-17，进行中：三处根因已修，待复测）
+
+上一轮把"掉线"归因为"手机对无网热点断得太快"并选了方案1（Captive-Portal 保活）。本轮实现保活后抓串口，逐步定位到**三个真正的固件级根因**，均已修复：
+
+### 根因1：与 protocomm 共享 httpd 崩溃（LoadProhibited bootloop）
+- 现象：刷入保活固件后网关一起步就 panic 重启，SoftAP/门户随崩溃消失，手机连上几秒即断。
+- addr2line：`httpd_find_uri_handler` ← `protocomm_httpd_add_endpoint` ← `network_prov_mgr_start_service` ← `gateway_wifi_task`。
+- 根因：`network_prov_scheme_softap_set_httpd_handle()` 内部按 `*(httpd_handle_t*)` 再解引用一层，必须传"句柄变量的地址"`&s_prov_httpd`，误传句柄值 → 野指针崩溃。
+- 修复：`gateway_bridge.c` 改为 `network_prov_scheme_softap_set_httpd_handle(&s_prov_httpd);`（commit a476d6b）。
+- 验证：重刷后干净启动，SoftAP+captive+DNS(53)+BLE Mesh(0x0005/0x0006 订阅 0xC000) 共存，无 panic。
+
+### 根因2：配网期 STA 重连风暴致 DHCP 卡死（手机"一直获取IP地址"）
+- 现象：手机能关联（join AID=1）但拿不到 IP，卡在"正在获取 IP 地址"，~18s 后 leave reason=3；串口无 DHCP 分配。
+- 根因：`wifi_event_handler` 在 STA_START 无条件 `esp_wifi_connect()`、STA_DISCONNECTED 又重连；配网阶段无凭据，STA 反复连断抢占射频把 SoftAP DHCP 挤死。
+- 修复：新增 `s_wifi_autoconnect` 标志，仅在已配网/拿到 IP 后才自动（重）连。
+- 验证：重刷后手机拿到 192.168.4.2，DNS catch-all 收到查询并应答，门户探测打到网关，连接稳定不再秒断。
+
+### 根因3：HTTP socket 耗尽致"会话建立失败"
+- 现象：手机已连上、门户在应答，App 点"连接设备"报"会话建立失败"；串口 `E httpd: httpd_accept_conn: error in accept (23)`（errno23 = 无空闲 socket）。
+- 根因：荣耀 MagicOS 高频发探测（/generate204、/ 等），短连接大量进入 TIME_WAIT，占满 LWIP 仅有的 10 个 socket；App 的 /prov-session 进来时已无 socket 可 accept → 握手失败。
+- 修复：`CONFIG_LWIP_MAX_SOCKETS` 10→16；captive httpd `max_open_sockets` 7→12；为 /generate204(无下划线) 与 / 注册直接 204 handler。
+- 状态：socket 修复固件已刷入 COM4 并校验通过。
+
+### 当前问题现状（2026-07-17 收尾，未解决）
+手机与网关 SoftAP 的**关联本身不稳定、时好时坏**，这是当前主要阻塞：
+- 好的时候：手机能关联（join, AID=1）、拿到 IP 192.168.4.2、DNS/门户探测正常应答（根因1/2 修复后确认过一次）。
+- 坏的时候：手机反复 removing station after unsuccessful auth/assoc, AID = 0——连 802.11 关联都没建立，App 报连不上/会话建立失败。刷入 socket 修复固件后的这次复测即落在此情况，全程没到 join AID=1，因此 socket 修复是否解决会话建立失败尚未验证。
+- 判断：根因1（崩溃）、根因2（DHCP 卡死）已确证修复；根因3（socket 耗尽）已改但待一次成功关联后才能验证。当前最上游不稳定点在 AP 关联层，疑似 ESP32-S3 上 BLE Mesh 常驻扫描/广播与 SoftAP 射频共存争用导致关联偶发失败（SW_COEXIST 已开）。
+- 下一步方向（下轮再做）：(1) 配网阶段临时降低 BLE Mesh 扫描占空比或暂停 Provisioner 扫描，给 SoftAP 关联让出射频；(2) 固定 SoftAP 信道并观察关联成功率；(3) 必要时评估配网期先只跑 SoftAP、拿到凭据后再起 Mesh 的分时方案。
+
+### 待复测（下轮，需先获得一次稳定关联）
+
+### App 侧本轮进展
+- 重新构建并 adb 安装 debug APK 到荣耀手机（MEP AN00）：SoftAP 页自动填 gateway1234、修复添加设备蓝底无字按钮。
+- 登录为云端账号（cloud_service bearer token）：须先在有外网环境登录/注册（token 存本地），再连无网的 Gateway-D31548 配网；配网仅与 192.168.4.1 通信，不需外网。
+
+1. App「热点兼容」gateway1234 下发 → NETWORK_PROV_WIFI_CRED_RECV/SUCCESS/END；
+2. 网关 IP_EVENT_STA_GOT_IP + MQTT 连接；
+3. MQTT → 网关 → BLE Mesh → 物理灯（COM8 D2/GPIO2、COM9 GPIO48 WS2812）；
+4. 门铃物理按键 → ringing / 快照 / 视频。

@@ -21,3 +21,5 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
 # Runtime SoftAP Wi-Fi provisioning (Security1 x25519 + PoP), matches app.
 CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
+# More LWIP sockets: captive-portal probe churn + provisioning httpd
+CONFIG_LWIP_MAX_SOCKETS=16

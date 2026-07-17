@@ -59,6 +59,8 @@ static esp_err_t catchall_404_handler(httpd_req_t *req, httpd_err_code_t err)
 static const httpd_uri_t s_uris[] = {
     { .uri = "/generate_204", .method = HTTP_GET, .handler = probe_204_handler },
     { .uri = "/gen_204", .method = HTTP_GET, .handler = probe_204_handler },
+    { .uri = "/generate204", .method = HTTP_GET, .handler = probe_204_handler },
+    { .uri = "/", .method = HTTP_GET, .handler = probe_204_handler },
     { .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = apple_success_handler },
     { .uri = "/library/test/success.html", .method = HTTP_GET, .handler = apple_success_handler },
     { .uri = "/ncsi.txt", .method = HTTP_GET, .handler = ncsi_handler },
@@ -75,7 +77,7 @@ esp_err_t farmely_captive_portal_start(httpd_handle_t *out_server)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.max_uri_handlers = 24;
-    config.max_open_sockets = 7;
+    config.max_open_sockets = 12;
     config.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&server, &config);
@@ -125,10 +127,13 @@ void farmely_captive_portal_configure_dhcp_dns(void)
     dns.ip.u_addr.ip4.addr = ipaddr_addr(AP_IP);
 
     uint8_t offer_dns = FARMELY_DHCPS_OFFER_DNS;
-    esp_netif_dhcps_stop(ap);
-    esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
-    esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
-                           &offer_dns, sizeof(offer_dns));
-    esp_netif_dhcps_start(ap);
-    ESP_LOGI(TAG, "SoftAP DHCP now advertises DNS %s", AP_IP);
+    esp_err_t e_stop = esp_netif_dhcps_stop(ap);
+    esp_err_t e_dns = esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
+    esp_err_t e_opt = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET,
+                          ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns,
+                          sizeof(offer_dns));
+    esp_err_t e_start = esp_netif_dhcps_start(ap);
+    ESP_LOGI(TAG, "SoftAP DHCP DNS=%s stop=%s dns=%s opt=%s start=%s", AP_IP,
+             esp_err_to_name(e_stop), esp_err_to_name(e_dns),
+             esp_err_to_name(e_opt), esp_err_to_name(e_start));
 }

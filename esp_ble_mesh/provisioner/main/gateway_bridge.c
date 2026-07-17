@@ -35,6 +35,7 @@ static uint32_t s_boot_nonce;
 static uint32_t s_sequence;
 static bool s_mqtt_started;
 static bool s_mqtt_connected;
+static bool s_wifi_autoconnect;
 static httpd_handle_t s_prov_httpd;
 
 static int64_t unix_timestamp(void)
@@ -263,12 +264,17 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
         farmely_captive_portal_configure_dhcp_dns();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (s_wifi_autoconnect) {
+            esp_wifi_connect();
+        }
     } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_mqtt_connected = false;
-        esp_wifi_connect();
+        if (s_wifi_autoconnect) {
+            esp_wifi_connect();
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        s_wifi_autoconnect = true;
         mqtt_start();
     }
 }
@@ -381,6 +387,7 @@ static void gateway_wifi_task(void *arg)
     } else {
         ESP_LOGI(TAG, "already provisioned -> connecting with stored Wi-Fi");
         network_prov_mgr_deinit();
+        s_wifi_autoconnect = true;
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_start());
     }
