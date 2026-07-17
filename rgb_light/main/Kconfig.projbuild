@@ -1,0 +1,65 @@
+menu "RGB Light Configuration"
+
+    choice EXAMPLE_PROV_TRANSPORT
+        prompt "WiFi provisioning transport"
+        default EXAMPLE_PROV_TRANSPORT_BLE
+
+        config EXAMPLE_PROV_TRANSPORT_BLE
+            bool "BLE (recommended)"
+
+        config EXAMPLE_PROV_TRANSPORT_SOFTAP
+            bool "SoftAP compatibility mode"
+    endchoice
+
+    config EXAMPLE_PROV_SOFTAP_PREFIX
+        string "Provisioning device name prefix"
+        default "Light-"
+        help
+            The BLE advertisement or SoftAP name is built as
+            "<prefix><last 3 MAC bytes>", e.g. Light-4C3408.
+
+    config EXAMPLE_PROV_POP
+        string "Provisioning proof-of-possession"
+        default "light1234"
+
+    config EXAMPLE_MQTT_BROKER_URI
+        string "MQTT broker URI"
+        default "mqtt://121.40.131.194:1883"
+
+    config EXAMPLE_MQTT_USERNAME
+        string "MQTT username"
+        default "yskj"
+
+    config EXAMPLE_MQTT_PASSWORD
+        string "MQTT password"
+        default "yskj@123"
+
+    config EXAMPLE_LIGHT_GPIO
+        int "WS2812 RGB LED GPIO"
+        default 48
+        range 0 48
+        help
+            Data pin of the onboard WS2812 LED (GPIO48 on most ESP32-S3
+            N16R8 devkits; some boards use GPIO38).
+
+    config EXAMPLE_LIGHT_LED_COUNT
+        int "Number of WS2812 LEDs"
+        default 1
+        range 1 64
+
+    config EXAMPLE_ENABLE_COLOR
+        bool "Enable RGB color commands"
+        default y
+        help
+            When disabled the light only supports on/off (used to build the
+            baseline 1.0.0 firmware for the OTA end-to-end test).
+
+    config EXAMPLE_PRODUCT_ID
+        string "OTA product id"
+        default "farmely-rgb-light"
+
+    config EXAMPLE_HW_VERSION
+        string "OTA hardware version"
+        default "s3-n16r8"
+
+endmenu

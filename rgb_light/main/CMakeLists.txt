@@ -1,0 +1,23 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "app_wifi.c"
+        "app_light.c"
+        "app_mqtt.c"
+        "app_ota.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_wifi
+        esp_event
+        esp_netif
+        nvs_flash
+        esp_timer
+        esp_driver_gpio
+        esp_hw_support
+        lwip
+        mqtt
+        app_update
+        esp_https_ota
+        esp_http_client
+        network_provisioning
+)

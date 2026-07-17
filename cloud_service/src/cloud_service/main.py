@@ -17,6 +17,7 @@ from .models import (
     AutomationResponse,
     AutomationUpdateRequest,
     ClaimDeviceRequest,
+    ClaimMyDeviceRequest,
     DesiredUpdateResponse,
     DeviceEventResponse,
     DeviceResponse,
@@ -231,11 +232,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def claim_my_device(
         device_id: str,
+        request: ClaimMyDeviceRequest | None = None,
         principal: Principal = Depends(get_principal),
     ) -> DeviceResponse:
         user_id = require_account(principal)
+        force = request.force if request is not None else False
         try:
-            return store.claim_device(device_id, user_id)
+            return store.claim_device(device_id, user_id, force=force)
         except DeviceNotFoundError as error:
             raise missing_device(error) from error
         except DeviceAlreadyClaimedError as error:

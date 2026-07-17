@@ -122,6 +122,7 @@ class MeshDevice {
     this.type = DeviceType.lightBulb,
     this.name,
     this.value,
+    this.colorHex,
   });
 
   final String id;
@@ -137,6 +138,9 @@ class MeshDevice {
 
   /// Optional sensor reading (e.g. "26.5°C"), for read-only devices.
   final String? value;
+
+  /// Current RGB color ("#RRGGBB") for lights that support color.
+  final String? colorHex;
 
   bool get isRoot => role == 'root';
 
@@ -160,6 +164,7 @@ class MeshDevice {
       type: DeviceType.fromString(j['type'] as String?),
       name: j['name'] as String?,
       value: j['value']?.toString(),
+      colorHex: j['color'] as String?,
       updatedAt: DateTime.now(),
     );
   }
@@ -260,6 +265,8 @@ class MqttService {
     client.subscribe(AppConfig.lightStatusTopic, MqttQos.atLeastOnce);
     client.subscribe(AppConfig.lightGatewayStatusTopic, MqttQos.atLeastOnce);
     client.subscribe(AppConfig.lightNodeStatusFilter, MqttQos.atLeastOnce);
+    client.subscribe(AppConfig.doorbellStatusFilter, MqttQos.atLeastOnce);
+    client.subscribe(AppConfig.gatewayStatusFilter, MqttQos.atLeastOnce);
     client.updates?.listen(_onMessage);
   }
 
@@ -279,6 +286,10 @@ class MqttService {
         _handleGateway(payload);
       } else if (AppConfig.lightNodeIdFromStatusTopic(topic) != null) {
         _handleNodeStatus(payload);
+      } else if (topic.startsWith('doorbell/') && topic.endsWith('/status')) {
+        _handleNodeStatus(payload);
+      } else if (AppConfig.gatewayIdFromStatusTopic(topic) != null) {
+        _handleFarmelyGateway(AppConfig.gatewayIdFromStatusTopic(topic)!, payload);
       }
     }
   }
@@ -290,6 +301,37 @@ class MqttService {
     if (status == null) return;
     _lastGateway = status;
     _gateway.add(status);
+    if (status.root != '\u2014') {
+      _deviceMap[status.root] = MeshDevice(
+        id: status.root,
+        on: false,
+        online: status.online,
+        layer: status.layer,
+        role: 'root',
+        type: DeviceType.gateway,
+        name: 'Mesh \u7f51\u5173',
+        updatedAt: DateTime.now(),
+      );
+      _devices.add(_sortedDevices());
+    }
+  }
+
+  void _handleFarmelyGateway(String gatewayId, String payload) {
+    final map = _tryDecode(payload);
+    if (map == null) return;
+    final data = map['data'];
+    if (data is! Map<String, dynamic>) return;
+    _deviceMap[gatewayId] = MeshDevice(
+      id: gatewayId,
+      on: false,
+      online: data['online'] == true,
+      layer: 0,
+      role: 'root',
+      type: DeviceType.gateway,
+      name: 'Mesh \u7f51\u5173',
+      updatedAt: DateTime.now(),
+    );
+    _devices.add(_sortedDevices());
   }
 
   void _handleNodeStatus(String payload) {
@@ -348,6 +390,10 @@ class MqttService {
   /// Address a single node (`office/light/node/<id>/cmd`).
   void setNodeLight(String id, bool on) =>
       _publish(AppConfig.lightNodeCmdTopic(id), on ? 'on' : 'off');
+
+  /// Set the RGB color of a color-capable light ("#RRGGBB").
+  void setNodeColor(String id, String hex) =>
+      _publish(AppConfig.lightNodeCmdTopic(id), 'color:$hex');
 
   void dispose() {
     _client?.disconnect();

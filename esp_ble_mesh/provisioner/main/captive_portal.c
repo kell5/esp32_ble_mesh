@@ -24,6 +24,9 @@ static dns_server_handle_t s_dns;
  * to 192.168.4.1). */
 static esp_err_t probe_204_handler(httpd_req_t *req)
 {
+    /* Probes are one-shot: close the connection so OS connectivity checks
+     * do not pile up keep-alive sockets and starve protocomm requests. */
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
@@ -34,6 +37,7 @@ static esp_err_t apple_success_handler(httpd_req_t *req)
 {
     static const char body[] =
         "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>";
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -42,6 +46,7 @@ static esp_err_t apple_success_handler(httpd_req_t *req)
 /* Windows NCSI probe. */
 static esp_err_t ncsi_handler(httpd_req_t *req)
 {
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_send(req, "Microsoft NCSI", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -51,6 +56,9 @@ static esp_err_t ncsi_handler(httpd_req_t *req)
 static esp_err_t catchall_404_handler(httpd_req_t *req, httpd_err_code_t err)
 {
     (void)err;
+    ESP_LOGI(TAG, "catch-all 204 for %s %s",
+             req->method == HTTP_GET ? "GET" : "non-GET", req->uri);
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;

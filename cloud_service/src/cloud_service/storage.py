@@ -423,7 +423,9 @@ class DeviceStore:
                 )
             return self._get_device(connection, device_id)
 
-    def claim_device(self, device_id: str, user_id: str) -> DeviceResponse:
+    def claim_device(
+        self, device_id: str, user_id: str, force: bool = False
+    ) -> DeviceResponse:
         now = _utc_now().isoformat()
         with self._connection() as connection:
             row = connection.execute(
@@ -432,7 +434,7 @@ class DeviceStore:
             if row is None:
                 raise DeviceNotFoundError(device_id)
             owner_id = row["owner_id"]
-            if owner_id is not None and owner_id != user_id:
+            if not force and owner_id is not None and owner_id != user_id:
                 raise DeviceAlreadyClaimedError(device_id)
             connection.execute(
                 "UPDATE devices SET owner_id = ?, updated_at = ? WHERE device_id = ?",

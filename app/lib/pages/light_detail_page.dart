@@ -63,6 +63,39 @@ class _LightDetailPageState extends State<LightDetailPage> {
         type: d.type,
         name: d.name,
         value: d.value,
+        colorHex: d.colorHex,
+        updatedAt: d.updatedAt,
+      ),
+    );
+  }
+
+  static const List<(String, Color)> _swatches = [
+    ('#FFFFFF', Color(0xFFFFFFFF)),
+    ('#FF3B30', Color(0xFFFF3B30)),
+    ('#FF9500', Color(0xFFFF9500)),
+    ('#FFCC00', Color(0xFFFFCC00)),
+    ('#34C759', Color(0xFF34C759)),
+    ('#00C7BE', Color(0xFF00C7BE)),
+    ('#007AFF', Color(0xFF007AFF)),
+    ('#AF52DE', Color(0xFFAF52DE)),
+    ('#FF2D55', Color(0xFFFF2D55)),
+  ];
+
+  void _setColor(String hex) {
+    final d = _device;
+    if (d == null || !d.online) return;
+    widget.mqtt.setNodeColor(d.id, hex);
+    setState(
+      () => _device = MeshDevice(
+        id: d.id,
+        on: true,
+        online: d.online,
+        layer: d.layer,
+        role: d.role,
+        type: d.type,
+        name: d.name,
+        value: d.value,
+        colorHex: hex,
         updatedAt: d.updatedAt,
       ),
     );
@@ -83,6 +116,10 @@ class _LightDetailPageState extends State<LightDetailPage> {
                 padding: const EdgeInsets.all(16),
                 children: [
                   _heroToggle(d),
+                  if (d.colorHex != null) ...[
+                    const SizedBox(height: 16),
+                    _colorCard(d),
+                  ],
                   const SizedBox(height: 16),
                   _infoCard(d),
                   const SizedBox(height: 16),
@@ -124,6 +161,48 @@ class _LightDetailPageState extends State<LightDetailPage> {
               size: 64,
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _colorCard(MeshDevice d) {
+    final current = d.colorHex?.toUpperCase();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: CupertinoColors.systemBackground,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('灯光颜色', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              for (final (hex, color) in _swatches)
+                GestureDetector(
+                  onTap: d.online ? () => _setColor(hex) : null,
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: current == hex
+                            ? CupertinoColors.activeBlue
+                            : CupertinoColors.systemGrey4,
+                        width: current == hex ? 3 : 1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );

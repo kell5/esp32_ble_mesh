@@ -7,7 +7,9 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_event.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_random.h"
@@ -22,6 +24,16 @@
 #include "captive_portal.h"
 
 #define TAG "FARMELY_BRIDGE"
+
+/* Fixed SoftAP channel during provisioning so the AP does not hop while the
+ * phone associates. */
+#define FARMELY_PROV_AP_CHANNEL 1
+
+/* Long-press this button (BOOT, active low) to erase the stored Wi-Fi
+ * credentials and reboot into SoftAP provisioning mode. */
+#define FARMELY_PROV_BUTTON_GPIO      GPIO_NUM_0
+#define FARMELY_PROV_BUTTON_HOLD_MS   3000
+#define FARMELY_PROV_BUTTON_POLL_MS   100
 
 static esp_mqtt_client_handle_t s_mqtt;
 static farmely_bridge_command_handler_t s_command_handler;
@@ -256,6 +268,45 @@ static void mqtt_start(void)
     }
 }
 
+/* Polls the BOOT button; a >=3 s press wipes the stored Wi-Fi credentials
+ * (esp_wifi_restore) and restarts, which drops the gateway back into the
+ * SoftAP provisioning flow on boot. */
+static void prov_button_task(void *arg)
+{
+    (void)arg;
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << FARMELY_PROV_BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&io) != ESP_OK) {
+        ESP_LOGE(TAG, "provisioning button GPIO%d config failed",
+                 (int)FARMELY_PROV_BUTTON_GPIO);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    uint32_t held_ms = 0;
+    for (;;) {
+        if (gpio_get_level(FARMELY_PROV_BUTTON_GPIO) == 0) {
+            held_ms += FARMELY_PROV_BUTTON_POLL_MS;
+            if (held_ms == FARMELY_PROV_BUTTON_HOLD_MS) {
+                ESP_LOGW(TAG, "button held %d ms -> erasing Wi-Fi credentials,"
+                              " rebooting into provisioning mode",
+                         (int)FARMELY_PROV_BUTTON_HOLD_MS);
+                esp_wifi_restore();
+                vTaskDelay(pdMS_TO_TICKS(100));
+                esp_restart();
+            }
+        } else {
+            held_ms = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(FARMELY_PROV_BUTTON_POLL_MS));
+    }
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -263,6 +314,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     (void)event_data;
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
         farmely_captive_portal_configure_dhcp_dns();
+        wifi_config_t ap_config;
+        if (esp_wifi_get_config(WIFI_IF_AP, &ap_config) == ESP_OK &&
+            ap_config.ap.channel != FARMELY_PROV_AP_CHANNEL) {
+            ap_config.ap.channel = FARMELY_PROV_AP_CHANNEL;
+            esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+            ESP_LOGI(TAG, "SoftAP pinned to channel %d",
+                     FARMELY_PROV_AP_CHANNEL);
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         if (s_wifi_autoconnect) {
             esp_wifi_connect();
@@ -363,6 +422,16 @@ static void gateway_wifi_task(void *arg)
     network_prov_mgr_is_wifi_provisioned(&provisioned);
 
     if (!provisioned) {
+        /* Verbose provisioning diagnostics: shows protocomm session setup,
+         * security1 handshake steps and per-request httpd activity so a
+         * failed "establish session" can be located from the UART log. */
+        esp_log_level_set("protocomm", ESP_LOG_DEBUG);
+        esp_log_level_set("protocomm_httpd", ESP_LOG_DEBUG);
+        esp_log_level_set("security1", ESP_LOG_DEBUG);
+        esp_log_level_set("httpd_uri", ESP_LOG_DEBUG);
+        esp_log_level_set("httpd_sess", ESP_LOG_DEBUG);
+        esp_log_level_set("httpd_parse", ESP_LOG_DEBUG);
+
         char service_name[32];
         build_prov_service_name(service_name, sizeof(service_name));
         ESP_LOGI(TAG, "not provisioned -> SoftAP \"%s\" at 192.168.4.1 "
@@ -374,6 +443,11 @@ static void gateway_wifi_task(void *arg)
             network_prov_scheme_softap_set_httpd_handle(&s_prov_httpd);
         }
 
+        /* Give the SoftAP the radio while the phone associates and
+         * provisions: BLE Mesh scanning otherwise competes for the shared
+         * 2.4 GHz radio and makes 802.11 association intermittently fail. */
+        farmely_mesh_yield_radio(true);
+
         ESP_ERROR_CHECK(network_prov_mgr_endpoint_create("custom-data"));
         ESP_ERROR_CHECK(network_prov_mgr_start_provisioning(
             NETWORK_PROV_SECURITY_1, (const void *)CONFIG_FARMELY_PROV_POP,
@@ -381,6 +455,7 @@ static void gateway_wifi_task(void *arg)
         ESP_ERROR_CHECK(network_prov_mgr_endpoint_register(
             "custom-data", prov_custom_data_handler, NULL));
         network_prov_mgr_wait();
+        farmely_mesh_yield_radio(false);
         farmely_captive_portal_stop(s_prov_httpd);
         s_prov_httpd = NULL;
         network_prov_mgr_deinit();
@@ -439,6 +514,10 @@ esp_err_t farmely_gateway_bridge_start(const char *gateway_id,
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
         return esp_wifi_start();
+    }
+
+    if (xTaskCreate(prov_button_task, "prov_btn", 2560, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "failed to start provisioning button task");
     }
 
     /* Runtime SoftAP provisioning: the phone app provides Wi-Fi credentials.

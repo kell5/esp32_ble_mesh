@@ -127,6 +127,26 @@ class AuthApiTest(unittest.TestCase):
         )
         self.assertEqual(conflict.status_code, 409, conflict.text)
 
+    def test_force_claim_transfers_ownership(self) -> None:
+        first = self._register_account("old-owner@example.com")["token"]
+        second = self._register_account("new-owner@example.com")["token"]
+        self._provision_device("node-301")
+        self.client.post("/api/v1/me/devices/node-301/claim", headers=self._bearer(first))
+
+        transferred = self.client.post(
+            "/api/v1/me/devices/node-301/claim",
+            headers=self._bearer(second),
+            json={"force": True},
+        )
+        self.assertEqual(transferred.status_code, 200, transferred.text)
+
+        old_listing = self.client.get("/api/v1/me/devices", headers=self._bearer(first))
+        self.assertEqual(old_listing.json(), [])
+        new_listing = self.client.get("/api/v1/me/devices", headers=self._bearer(second))
+        self.assertEqual(
+            [device["device_id"] for device in new_listing.json()], ["node-301"]
+        )
+
     def test_unclaim_removes_device_and_allows_reclaim(self) -> None:
         token = self._register_account("erin@example.com")["token"]
         self._provision_device("node-500")

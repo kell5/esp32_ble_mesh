@@ -532,6 +532,35 @@ static void farmely_recover_nodes_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* Called from gateway_bridge.c around the SoftAP provisioning window.
+ * Disabling both Provisioner bearers also disables the BLE Mesh scan
+ * (see bt_mesh_provisioner_disable), which hands the shared 2.4 GHz radio
+ * to the SoftAP while the phone associates and provisions. Mesh control is
+ * unavailable during the window and recovers right after. */
+void farmely_mesh_yield_radio(bool yield)
+{
+    esp_err_t err;
+
+    if (yield) {
+        err = esp_ble_mesh_provisioner_prov_disable(
+            (esp_ble_mesh_prov_bearer_t)(ESP_BLE_MESH_PROV_ADV |
+                                         ESP_BLE_MESH_PROV_GATT));
+        ESP_LOGI(TAG, "BLE Mesh yielded radio to SoftAP provisioning (err %d)",
+                 err);
+    } else {
+        err = esp_ble_mesh_provisioner_prov_enable(
+            (esp_ble_mesh_prov_bearer_t)(ESP_BLE_MESH_PROV_ADV |
+                                         ESP_BLE_MESH_PROV_GATT));
+        ESP_LOGI(TAG, "BLE Mesh radio resumed after provisioning (err %d)",
+                 err);
+        if (err == ESP_OK &&
+            xTaskCreate(farmely_recover_nodes_task, "mesh_recover", 3072,
+                        NULL, 5, NULL) != pdPASS) {
+            ESP_LOGW(TAG, "Unable to restart Mesh recovery task");
+        }
+    }
+}
+
 #if CONFIG_FARMELY_BENCH_SELF_TEST
 static bool farmely_wait_status_update(size_t index, uint32_t version,
                                        TickType_t timeout)

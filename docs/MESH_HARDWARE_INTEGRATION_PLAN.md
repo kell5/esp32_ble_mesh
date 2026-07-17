@@ -241,6 +241,16 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 - 判断：根因1（崩溃）、根因2（DHCP 卡死）已确证修复；根因3（socket 耗尽）已改但待一次成功关联后才能验证。当前最上游不稳定点在 AP 关联层，疑似 ESP32-S3 上 BLE Mesh 常驻扫描/广播与 SoftAP 射频共存争用导致关联偶发失败（SW_COEXIST 已开）。
 - 下一步方向（下轮再做）：(1) 配网阶段临时降低 BLE Mesh 扫描占空比或暂停 Provisioner 扫描，给 SoftAP 关联让出射频；(2) 固定 SoftAP 信道并观察关联成功率；(3) 必要时评估配网期先只跑 SoftAP、拿到凭据后再起 Mesh 的分时方案。
 
+### 关联不稳定的修复（2026-07-17，已实现待刷写复测）
+针对上面"AP 关联层不稳定"，按方向 (1)+(2) 已改固件（未编译未刷写）：
+- **配网期让出射频**：新增 `farmely_mesh_yield_radio(bool)`（`main.c`，声明在 `gateway_bridge.h`）。`gateway_wifi_task` 在 `network_prov_mgr_start_provisioning()` 前调用 `yield(true)` → `esp_ble_mesh_provisioner_prov_disable(ADV|GATT)`；已核对 IDF v6.0.1 `bt_mesh_provisioner_disable`：两个 bearer 全关时会 `bt_mesh_scan_disable()`，即配网窗口内 BLE Mesh 扫描完全停止，2.4G 射频让给 SoftAP。`network_prov_mgr_wait()` 返回后 `yield(false)` 重新 enable 并重启 `mesh_recover` 任务恢复节点订阅/状态。代价：配网窗口内 mesh 控制不可用（此时无 Wi-Fi/MQTT，无实际影响）。
+- **固定 SoftAP 信道**：`gateway_bridge.c` 在 `WIFI_EVENT_AP_START` 时把 AP 信道钉在 1（`FARMELY_PROV_AP_CHANNEL`，读回配置不同才改写，避免事件循环）。
+- 复测步骤：重编重刷 COM4 → 观察手机连续 5 次关联成功率（应稳定 join AID=1 + 拿 IP）→ 再验证根因3 的 /prov-session 会话建立 → 走通 CRED_RECV→SUCCESS→END→STA GOT_IP→MQTT。
+
+### 复测结果（2026-07-17 中午）
+- 用户实测：**关联已稳定**（射频让出+固定信道生效），但 App 仍报"会话建立失败"。
+- 失败时未拿到串口证据；已刷入诊断固件（COM4，干净启动确认）：`.sdkcfg-gws3` 开 `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG`，配网期运行时开 protocomm/protocomm_httpd/security1/httpd_uri/httpd_sess/httpd_parse 的 DEBUG 日志；captive 探测应答全部加 `Connection: close`（防 Honor 探测长连接占满 httpd socket），catch-all 204 记录 URI。下次复测时抓串口即可定位 /prov-session 是否到达、卡在握手哪一步。
+
 ### 待复测（下轮，需先获得一次稳定关联）
 
 ### App 侧本轮进展
@@ -251,3 +261,40 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 2. 网关 IP_EVENT_STA_GOT_IP + MQTT 连接；
 3. MQTT → 网关 → BLE Mesh → 物理灯（COM8 D2/GPIO2、COM9 GPIO48 WS2812）；
 4. 门铃物理按键 → ringing / 快照 / 视频。
+
+
+### 会话建立失败根因确认与修复（2026-07-17 下午，已验证）
+- 串口证据：手机点"连接设备"/"扫描"时网关只收到荣耀系统探测（/generate204 等），App 的 /prov-session、/prov-scan 完全没到设备。根因：SoftAP 无互联网，安卓把 App 的 HTTP 流量路由到移动数据，192.168.4.1 请求走错网络。
+- 修复（App 侧）：新增 `app/lib/prov/wifi_bind.dart` + `MainActivity.kt` 平台通道 `farmely/wifi_bind`（`ConnectivityManager.requestNetwork(TRANSPORT_WIFI)` + `bindProcessToNetwork`），`provisioning_page.dart` 在 SoftAP 流程 establishSession 前 bind、finally unbind；Manifest 补 INTERNET/ACCESS_NETWORK_STATE/CHANGE_NETWORK_STATE。用户实测配网成功。
+
+### 新增功能（2026-07-17，已刷写 COM4 / 已装 App）
+- 长按重新配网：`gateway_bridge.c` 新增 prov_button_task，BOOT 键（GPIO0，低有效）长按 3 秒 → `esp_wifi_restore()` 清 WiFi 凭据（保留 mesh 节点数据）→ 重启进 SoftAP 配网。`main/CMakeLists.txt` REQUIRES 补 esp_driver_gpio。
+- 控灯反馈延迟优化（App）：`cloud_devices_page.dart` 卡片状态改为三层：点击立即乐观翻转（_pendingOn）→ 网关 MQTT 节点状态到达即确认（订阅 mqtt.devices，_live 覆盖 shadow）→ 4 秒未确认回退云端 shadow。原实现是发命令后固定等 500ms 再拉云 shadow（云影子未及时更新导致卡片回跳/迟钝）。
+
+
+### 设备列表清理与门铃可发现（2026-07-17 晚，已部署）
+- 现象：设备列表出现 3 个"Mesh 网关"（2 在线 1 离线），门铃找不到。
+- 根因：MQTT broker 上残留旧固件的 retained 消息（office/light/gateway/status root=node-0B55C0、office/light/node/{node-0B55C0,node-D31548,node-F53324}/status role=root），云端 mqtt_bridge 每次收到都注册成 type=gateway 的幽灵设备；App 本地自动发现只订阅 office/light/node/+/status，门铃的 doorbell/+/status 不在其中。
+- 修复：① 已用 mosquitto_pub -r -n 清除上述 5 条 retained 幽灵主题（真实灯泡 node-0B55C2/node-CB59EA 保留）；② App MqttService 新增订阅 doorbell/+/status（AppConfig.doorbellStatusFilter），门铃(door-001)现在会出现在「自动发现（局域网）」里。真实网关 id 为 node-D3154A（farmely/gateway/node-D3154A/up/status）。云端 DB 里已被认领的幽灵网关条目需在 App 长按卡片"移除设备"。
+
+
+### 配网即认领（强制转移归属，2026-07-17 晚，已部署）
+- 云端：POST /api/v1/me/devices/{id}/claim 支持可选 body {"force": true}，强制把设备归属转移到当前账号（物理重新配网 = 占有证明）；storage.claim_device 加 force 参数；新增单测 test_force_claim_transfers_ownership，服务器全量 51 测试通过后已重建容器上线（本次部署同时把工作区较新的 OTA 代码同步到了服务器 /opt/mesh-cloud-service）。
+- App：添加设备时若返回 409（已被其它账号认领），弹窗确认后用 force=true 重新认领；MqttService._handleGateway 现在把网关本身（root id，如 node-D3154A）也加入本地设备列表，「自动发现」能直接看到网关。
+- 数据清理：door-001 已解除旧测试账号归属；云端 DB 中 3 条幽灵网关记录（node-0B55C0/node-D31548/node-F53324）已删除。
+
+
+### 网关自动发现修复（2026-07-17 深夜，已部署）
+- 现象：网关重新配网上线后「添加设备-自动发现」看不到网关；门铃可以。
+- 根因：现网关固件只发 farmely/gateway/<id>/up/status（不再发旧 office/light/gateway/status 汇总），App 之前只订阅旧主题，收不到网关状态。
+- 修复：AppConfig 新增 gatewayStatusFilter=farmely/gateway/+/up/status 与 gatewayIdFromStatusTopic()；MqttService 订阅并把网关（type=gateway, role=root）加入本地设备列表，自动发现即与门铃同一机制。已抓 MQTT 验证 node-D3154A 在线上报正常。
+
+
+### OTA 端到端 + RGB 灯（2026-07-17）
+- 新增 `rgb_light/` 固件工程（ESP32-S3 N16R8，板载 WS2812/GPIO48）：BLE 配网（前缀 Light-，PoP light1234）、BOOT 长按 3 秒重配、MQTT 上报 office/light/node/<id>/status（App 本地发现）与 farmely/light/<id>/up/status（云端，含 product_id=farmely-rgb-light / hw_version=s3-n16r8 / fw_version）、订阅 down/cmd 与 down/ota。
+- OTA 客户端：收到 down/ota 里的 url 后 esp_https_ota 下载并重启（分区表 ota_0/ota_1 各 6MB，`esp_ota_mark_app_valid_cancel_rollback` 在 WiFi 连接成功后提交镜像）。
+- 版本：v1.0.0 仅开关（sdkcfg-nocolor 构建），v1.1.0 支持 RGB（cmd: "color:#RRGGBB" 或 JSON {"color":"#RRGGBB"}）。
+- 固件托管：服务器 nginx `/www/wwwroot/114.55.208.72/firmware/`，HTTP 直链 http://114.55.208.72/firmware/rgb_light_v11.bin（站点 https 重定向对 /firmware/ 路径豁免）。
+- 云端已注册 firmware fw-9103b97c…（1.1.0）+ rollout 100%：设备上报 1.0.0 后云自动下发 OTA。
+- App：MeshDevice 新增 colorHex；灯详情页对上报 color 的设备显示九宫格色板，发布 color:#RRGGBB 到 office/light/node/<id>/cmd。
+- 说明：设备端暂未校验 sha256（esp_https_ota 校验镜像头与分区），后续可加。

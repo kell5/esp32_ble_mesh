@@ -66,6 +66,13 @@ class ClaimDeviceRequest(ApiModel):
     user_id: str = Field(pattern=USER_ID_PATTERN)
 
 
+class ClaimMyDeviceRequest(ApiModel):
+    """Body for /me/devices/{id}/claim; `force` transfers ownership after the
+    device was physically re-provisioned by the new owner."""
+
+    force: bool = False
+
+
 class ShadowPatchRequest(ApiModel):
     state: dict[str, JsonValue]
     message_id: str | None = Field(default=None, min_length=1, max_length=128)

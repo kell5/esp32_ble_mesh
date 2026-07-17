@@ -40,6 +40,14 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
   bool _loading = true;
   String? _error;
 
+  /// Live per-node state from the local MQTT bridge; fresher than the cloud
+  /// shadow, so cards reflect a toggle as soon as the gateway confirms it.
+  Map<String, MeshDevice> _live = const {};
+  StreamSubscription<List<MeshDevice>>? _liveSub;
+
+  /// Optimistic on/off per device while a toggle is in flight.
+  final Map<String, bool> _pendingOn = {};
+
   @override
   void initState() {
     super.initState();
@@ -47,13 +55,35 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
       baseUrl: widget.session.baseUrl,
       token: widget.session.token,
     );
+    _live = {for (final d in widget.mqtt.devicesSnapshot) d.id: d};
+    _liveSub = widget.mqtt.devices.listen((list) {
+      if (!mounted) return;
+      setState(() {
+        _live = {for (final d in list) d.id: d};
+        _pendingOn.removeWhere(
+          (id, on) => _live[id] != null && _live[id]!.on == on,
+        );
+      });
+    });
     _refresh();
   }
 
   @override
   void dispose() {
+    _liveSub?.cancel();
     _client?.close();
     super.dispose();
+  }
+
+  bool _effectiveOn(CloudDeviceView view) {
+    final id = view.device.deviceId;
+    return _pendingOn[id] ?? _live[id]?.on ?? view.on;
+  }
+
+  bool _effectiveOnline(CloudDeviceView view) {
+    final id = view.device.deviceId;
+    final live = _live[id];
+    return (live != null && live.online) || view.online;
   }
 
   Future<void> _refresh() async {
@@ -96,14 +126,21 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
   }
 
   Future<void> _toggle(CloudDeviceView view) async {
-    final target = !view.on;
     final deviceId = view.device.deviceId;
+    final target = !_effectiveOn(view);
+    // Flip the card immediately; the MQTT listener clears the override as
+    // soon as the gateway reports the confirmed node state.
+    setState(() => _pendingOn[deviceId] = target);
     if (_reachableLocally(deviceId)) {
       widget.mqtt.setNodeLight(deviceId, target);
-      // Let the node report back through the MQTT bridge, then re-read the
-      // shadow so the card reflects the confirmed state.
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      await _refresh();
+      // Fallback: if no confirmation arrived, drop the optimistic state and
+      // re-read the cloud shadow.
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 4)).then((_) async {
+          if (!mounted) return;
+          if (_pendingOn.remove(deviceId) != null) await _refresh();
+        }),
+      );
       return;
     }
     final client = _client;
@@ -117,7 +154,10 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
       await _refresh();
     } on CloudApiException catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.message);
+      setState(() {
+        _pendingOn.remove(deviceId);
+        _error = e.message;
+      });
     }
   }
 
@@ -236,16 +276,16 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
         SmartCard(
           leading: DeviceIcon(
             type: view.device.deviceType,
-            online: view.online,
-            on: view.on,
+            online: _effectiveOnline(view),
+            on: _effectiveOn(view),
           ),
           title: view.device.displayName,
           subtitle: _subtitle(view),
-          online: view.online,
+          online: _effectiveOnline(view),
           trailing: view.isControllable
               ? PowerButton(
-                  on: view.online && view.on,
-                  enabled: view.online,
+                  on: _effectiveOnline(view) && _effectiveOn(view),
+                  enabled: _effectiveOnline(view),
                   onPressed: () => _toggle(view),
                 )
               : (view.shadow?.value != null
@@ -304,7 +344,10 @@ class _CloudDevicesPageState extends State<CloudDevicesPage> {
 
   String _subtitle(CloudDeviceView view) {
     final type = view.device.deviceType;
-    return type.stateLabel(online: view.online, on: view.on);
+    return type.stateLabel(
+      online: _effectiveOnline(view),
+      on: _effectiveOn(view),
+    );
   }
 
   Widget _emptyState() {
@@ -461,6 +504,48 @@ class _AddDevicePageState extends State<_AddDevicePage> {
     });
     try {
       await widget.client.claimDevice(deviceId);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on CloudApiException catch (e) {
+      if (!mounted) return;
+      if (e.statusCode == 409) {
+        setState(() => _busy = false);
+        await _confirmForceClaim(deviceId);
+        return;
+      }
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+    }
+  }
+
+  Future<void> _confirmForceClaim(String deviceId) async {
+    final confirmed = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text('设备已被其它账号认领'),
+        content: const Text('如果这台设备在你手里（例如刚重新配网），可以强制转移到当前账号。原账号将失去该设备。'),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('强制认领'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.client.claimDevice(deviceId, force: true);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } on CloudApiException catch (e) {

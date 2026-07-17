@@ -12,6 +12,7 @@ import '../prov/security1.dart';
 import '../prov/transport.dart';
 import '../prov/transport_ble.dart';
 import '../prov/transport_http.dart';
+import '../prov/wifi_bind.dart';
 
 enum _ProvisioningTransport { ble, softAp }
 
@@ -159,7 +160,12 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
     if (_busy) return;
     setState(() => _busy = true);
     Provisioning? prov;
+    final useSoftAp = _transport == _ProvisioningTransport.softAp;
     try {
+      if (useSoftAp && !await WifiBind.bind()) {
+        _log('未能锁定设备热点网络，请确认手机已连接 Gateway-XXXXXX 热点后重试。');
+        return;
+      }
       prov = _newSession();
       _log('正在连接设备并建立安全会话…');
       if (!await prov.establishSession()) {
@@ -179,6 +185,7 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
       _log('扫描 WiFi 失败：$error');
     } finally {
       await prov?.dispose();
+      if (useSoftAp) await WifiBind.unbind();
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -220,7 +227,12 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
     }
     setState(() => _busy = true);
     Provisioning? prov;
+    final useSoftAp = _transport == _ProvisioningTransport.softAp;
     try {
+      if (useSoftAp && !await WifiBind.bind()) {
+        _log('未能锁定设备热点网络，请确认手机已连接 Gateway-XXXXXX 热点后重试。');
+        return;
+      }
       prov = _newSession();
       _log('正在建立安全会话…');
       if (!await prov.establishSession()) {
@@ -274,6 +286,7 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
       _log('配网出错：$error');
     } finally {
       await prov?.dispose();
+      if (useSoftAp) await WifiBind.unbind();
       if (mounted) setState(() => _busy = false);
     }
   }

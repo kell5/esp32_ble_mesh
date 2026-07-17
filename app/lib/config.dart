@@ -15,6 +15,9 @@ class AppConfig {
   static String get doorbellEventTopic => 'doorbell/$doorbellId/event';
   static String get doorbellCmdTopic => 'doorbell/$doorbellId/cmd';
 
+  // Retained doorbell presence: doorbell/<id>/status -> {id, online, type}.
+  static const String doorbellStatusFilter = 'doorbell/+/status';
+
   // ---- Video: MJPEG-over-HTTP (OV3660 only produces JPEG) ----
   // A1 局域网直连：手机与板子同一 WiFi，直接拉板子的 :81/stream。
   // A2 服务器中继：板子推帧到公网中继，App 拉 /stream/<id>，可远程观看。
@@ -50,6 +53,17 @@ class AppConfig {
 
   // Root/gateway aggregate status: {online, root, layer, nodes, online_nodes, heap}.
   static const String lightGatewayStatusTopic = 'office/light/gateway/status';
+
+  /// Farmely 网关状态：`farmely/gateway/<id>/up/status` -> {data:{online,type,...}}
+  static const String gatewayStatusFilter = 'farmely/gateway/+/up/status';
+
+  static String? gatewayIdFromStatusTopic(String topic) {
+    const prefix = 'farmely/gateway/';
+    const suffix = '/up/status';
+    if (!topic.startsWith(prefix) || !topic.endsWith(suffix)) return null;
+    final id = topic.substring(prefix.length, topic.length - suffix.length);
+    return id.isEmpty || id.contains('/') ? null : id;
+  }
 
   // Per-node status (retained) published by the root:
   // office/light/node/<id>/status -> {id, online, state, layer, role}.

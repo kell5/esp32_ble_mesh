@@ -212,11 +212,12 @@ class CloudClient {
   }
 
   /// Claim an existing (auto-registered) device to the logged-in account.
-  Future<CloudDevice> claimDevice(String deviceId) async {
+  Future<CloudDevice> claimDevice(String deviceId, {bool force = false}) async {
     final response = await _send(
       () => _http.post(
         _uri('/api/v1/me/devices/${Uri.encodeComponent(deviceId)}/claim'),
         headers: _headers,
+        body: jsonEncode({'force': force}),
       ),
     );
     _ensureOk(response);
