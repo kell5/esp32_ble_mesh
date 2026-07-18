@@ -801,15 +801,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.post(
         "/api/v1/devices/{device_id}/ota/check",
         response_model=OtaCheckResponse,
-        dependencies=[authorization],
     )
     def check_device_ota(
-        device_id: str, request: OtaCheckRequest
+        device_id: str,
+        request: OtaCheckRequest,
+        principal: Principal = Depends(get_principal),
     ) -> OtaCheckResponse:
-        try:
-            store.get_device(device_id)
-        except DeviceNotFoundError as error:
-            raise missing_device(error) from error
+        enforce_device(principal, device_id)
         return ota_engine.evaluate(
             device_id, request.product_id, request.hw_version, request.fw_version
         )

@@ -188,7 +188,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/users/user-001/automations \
 | `POST` | `/api/v1/rollouts` | 新建灰度规则 |
 | `GET` | `/api/v1/rollouts` | 列出 rollout |
 | `GET` `PATCH` `DELETE` | `/api/v1/rollouts/<id>` | 读取、更新、删除 rollout |
-| `POST` | `/api/v1/devices/<id>/ota/check` | 按上报版本匹配并下发 OTA（管理员/置备触发） |
+| `POST` | `/api/v1/devices/<id>/ota/check` | 按上报版本匹配并下发 OTA（管理员或该设备拥有者可触发） |
 | `POST` | `/api/v1/devices/<id>/ota/progress` | 设备回报升级进度/结果 |
 | `GET` | `/api/v1/devices/<id>/ota/updates` | 查询该设备升级记录（归属校验） |
 
@@ -263,7 +263,7 @@ location ^~ /cloud/ {
 
 ## 后续边界
 
-当前邮箱账号体系为 **demo 级**：token 不过期、无邮箱验证/找回密码/登录限流，密码哈希用标准库 PBKDF2。生产化前还需正式认证（如 JWT+刷新、过期与限流）、broker ACL 和凭据轮换。TLS 由自有服务器的 Nginx 反代提供（见上）。门铃事件仅记录事件元数据，尚无快照/媒体存储与索引。OTA 已实现服务端（固件仓库、灰度、`down/ota` 下发、MQTT/HTTP 进度回报）；`rgb_light` 直连固件样例已补齐 `esp_https_ota`、sha256 校验和回滚确认，真实板 OTA 成功/失败回滚仍需继续实机验证。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。
+当前邮箱账号体系为 **demo 级**：token 不过期、无邮箱验证/找回密码/登录限流，密码哈希用标准库 PBKDF2。生产化前还需正式认证（如 JWT+刷新、过期与限流）、broker ACL 和凭据轮换。TLS 由自有服务器的 Nginx 反代提供（见上）。门铃事件仅记录事件元数据，尚无快照/媒体存储与索引。OTA 已实现服务端（固件仓库、灰度、`down/ota` 下发、MQTT/HTTP 进度回报）；`rgb_light` 直连固件样例已完成 `esp_https_ota`、sha256 校验、回滚确认与真实板成功升级验证。自动化目前为单条件等值触发与即时动作，尚不含时间/多条件、延时与冷却。
 
 ## MQTT 协议规范（T-CLOUD-2）
 

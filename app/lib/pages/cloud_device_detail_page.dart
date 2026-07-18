@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 
 import '../services/cloud_client.dart';
@@ -26,27 +28,100 @@ class CloudDeviceDetailPage extends StatefulWidget {
 
 class _CloudDeviceDetailPageState extends State<CloudDeviceDetailPage> {
   CloudShadow? _shadow;
+  List<CloudOtaUpdate> _otaUpdates = const [];
   bool _busy = false;
+  bool _otaBusy = false;
   String? _error;
+  String? _otaMessage;
 
   @override
   void initState() {
     super.initState();
     _shadow = widget.initialShadow;
+    unawaited(_refreshOtaUpdates());
   }
 
   Future<void> _refresh() async {
     try {
       final shadow = await widget.client.getShadow(widget.device.deviceId);
+      final otaUpdates = await widget.client.listOtaUpdates(
+        widget.device.deviceId,
+      );
       if (!mounted) return;
       setState(() {
         _shadow = shadow;
+        _otaUpdates = otaUpdates;
         _error = null;
       });
     } on CloudApiException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.message);
     }
+  }
+
+  Future<void> _refreshOtaUpdates() async {
+    try {
+      final otaUpdates = await widget.client.listOtaUpdates(
+        widget.device.deviceId,
+      );
+      if (!mounted) return;
+      setState(() => _otaUpdates = otaUpdates);
+    } on CloudApiException catch (_) {
+      // OTA history is optional on the detail page; shadow/control should not
+      // be hidden just because there is no OTA record yet.
+    }
+  }
+
+  Future<void> _checkOta() async {
+    var shadow = _shadow;
+    if (shadow == null) {
+      shadow = await widget.client.getShadow(widget.device.deviceId);
+      if (!mounted) return;
+      setState(() => _shadow = shadow);
+    }
+    final productId = shadow?.productId;
+    final hwVersion = shadow?.hwVersion;
+    final fwVersion = shadow?.fwVersion;
+    if (productId == null || hwVersion == null || fwVersion == null) {
+      setState(
+        () => _otaMessage =
+            '设备还没有上报 product_id / hw_version / fw_version，暂不能检查 OTA。',
+      );
+      return;
+    }
+
+    setState(() {
+      _otaBusy = true;
+      _otaMessage = null;
+      _error = null;
+    });
+    try {
+      final result = await widget.client.checkOta(
+        widget.device.deviceId,
+        productId: productId,
+        hwVersion: hwVersion,
+        fwVersion: fwVersion,
+      );
+      final otaUpdates = await widget.client.listOtaUpdates(
+        widget.device.deviceId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _otaUpdates = otaUpdates;
+        _otaMessage = _otaResultMessage(result);
+      });
+    } on CloudApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _otaMessage = e.message);
+    } finally {
+      if (mounted) setState(() => _otaBusy = false);
+    }
+  }
+
+  String _otaResultMessage(CloudOtaCheckResult result) {
+    final target = result.target?.fwVersion ?? result.update?.targetFwVersion;
+    if (target == null) return result.reasonLabel;
+    return '${result.reasonLabel}：$target';
   }
 
   Future<void> _toggle() async {
@@ -93,6 +168,8 @@ class _CloudDeviceDetailPageState extends State<CloudDeviceDetailPage> {
                   _hero(type, online: online, on: on),
                   const SizedBox(height: 16),
                   _infoCard(shadow, online: online, on: on),
+                  const SizedBox(height: 16),
+                  _otaCard(shadow),
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -190,6 +267,71 @@ class _CloudDeviceDetailPageState extends State<CloudDeviceDetailPage> {
           if (shadow?.lastSeenAt != null) ...[
             _divider(),
             _row('最近上报', agoLabel(shadow!.lastSeenAt!)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _otaCard(CloudShadow? shadow) {
+    final latest = _otaUpdates.isEmpty ? null : _otaUpdates.first;
+    final currentFw = shadow?.fwVersion ?? '未上报';
+    final productId = shadow?.productId;
+    final hwVersion = shadow?.hwVersion;
+    final canCheck = shadow?.supportsOta == true && !_otaBusy;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: CupertinoColors.systemBackground,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '固件升级',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          _row('当前版本', currentFw),
+          if (productId != null) ...[_divider(), _row('产品型号', productId)],
+          if (hwVersion != null) ...[_divider(), _row('硬件版本', hwVersion)],
+          if (latest != null) ...[
+            _divider(),
+            _row('最近任务', '${latest.targetFwVersion} · ${latest.statusLabel}'),
+            if (latest.updatedAt != null) ...[
+              _divider(),
+              _row('任务更新', agoLabel(latest.updatedAt!)),
+            ],
+          ],
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: CupertinoButton.filled(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              onPressed: canCheck ? _checkOta : null,
+              child: _otaBusy
+                  ? const CupertinoActivityIndicator(
+                      color: CupertinoColors.white,
+                    )
+                  : const Text('检查更新'),
+            ),
+          ),
+          if (_otaMessage != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _otaMessage!,
+              style: const TextStyle(
+                color: CupertinoColors.systemGrey,
+                fontSize: 13,
+              ),
+            ),
+          ] else if (shadow?.supportsOta != true) ...[
+            const SizedBox(height: 10),
+            const Text(
+              '设备上报 OTA 能力后，这里会显示检查更新入口。',
+              style: TextStyle(color: CupertinoColors.systemGrey, fontSize: 13),
+            ),
           ],
         ],
       ),

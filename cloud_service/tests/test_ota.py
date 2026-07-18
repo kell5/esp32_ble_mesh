@@ -75,6 +75,18 @@ class OtaTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def _register_account(self, email: str) -> str:
+        response = self.client.post(
+            "/api/v1/auth/register",
+            json={"email": email, "password": "password123"},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        return str(response.json()["token"])
+
+    @staticmethod
+    def _bearer(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
     def test_firmware_register_is_upsert_and_listable(self) -> None:
         first = self._register_firmware()
         again = self._register_firmware(url="https://ota.example.com/new.bin")
@@ -117,6 +129,39 @@ class OtaTest(unittest.TestCase):
         self.assertEqual(result["update"]["status"], "pending")
         self.assertEqual(result["update"]["target_fw_version"], "1.1.0")
         self.assertIsNotNone(result["update"]["message_id"])
+
+    def test_owner_bearer_can_check_own_device_ota(self) -> None:
+        self._register_device("node-owner")
+        self._register_firmware()
+        self._create_rollout()
+        token = self._register_account("ota-owner@example.com")
+        claim = self.client.post(
+            "/api/v1/me/devices/node-owner/claim", headers=self._bearer(token)
+        )
+        self.assertEqual(claim.status_code, 200, claim.text)
+
+        response = self.client.post(
+            "/api/v1/devices/node-owner/ota/check",
+            headers=self._bearer(token),
+            json={"product_id": "bulb", "hw_version": "rev-a", "fw_version": "1.0.0"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["dispatched"])
+
+    def test_bearer_cannot_check_foreign_device_ota(self) -> None:
+        self._register_device("node-foreign")
+        owner = self._register_account("ota-real-owner@example.com")
+        other = self._register_account("ota-other@example.com")
+        self.client.post(
+            "/api/v1/me/devices/node-foreign/claim", headers=self._bearer(owner)
+        )
+
+        response = self.client.post(
+            "/api/v1/devices/node-foreign/ota/check",
+            headers=self._bearer(other),
+            json={"product_id": "bulb", "hw_version": "rev-a", "fw_version": "1.0.0"},
+        )
+        self.assertEqual(response.status_code, 403, response.text)
 
     def test_no_rollout_does_not_dispatch(self) -> None:
         self._register_device("node-none")

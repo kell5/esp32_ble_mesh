@@ -237,11 +237,12 @@ Flutter App
 - [x] 账号即空间的设备隔离：`/me/devices`、`/me/devices/<id>/claim`，非管理员只能访问自己认领的设备（跨账号 403）；`X-Cloud-Token` 保留为管理员/设备置备。
 - [x] 门铃事件记录：MQTT `event` 落库（`message_id` 幂等），`/me/events` 与 `/devices/<id>/events` 分页查询。
 - [x] App 注册/登录页（邮箱+密码，登录/注册切换）+ 只存 服务器地址/Bearer token/user_id/email；「云端」页支持「添加设备」（输入设备 ID 认领）。
+- [x] App 设备详情页新增 OTA 卡片：显示当前 `fw_version`、`product_id`、`hw_version`、最近升级任务，并支持当前账号对自己名下设备触发“检查更新”。
 - [x] App 修复 Android 系统返回键直接退出：先弹内层页面 → 切回首个标签 → 再弹确认框退出（`PopScope` + 每标签独立 Navigator）。
 - [x] 部署到自有服务器：`Dockerfile` + `docker-compose.yml`（容器仅监听 `127.0.0.1:8000`），Nginx 反代 `https://lk-mcu.online/cloud/` 复用现有 Let's Encrypt 证书，已上线连真实 broker。
 - [x] Ruff 通过；28 个测试通过（含账号鉴权与隔离、门铃事件）。
 - [ ] 生产 broker ACL、凭据轮换；账号体系生产化（token 过期/刷新、邮箱验证、限流）。
-- [x] 固件 OTA、版本管理、灰度与回滚（`rgb_light` 直连 OTA 实机闭环通过：ESP32-S3 `rgb-F53324` 从 v1.0.0 经云端 100% rollout 升级到 v1.1.0；设备上报 downloading/rebooting/success，云端 ota_updates 落库 success；新固件 MQTT 上线后再确认 rollback）。
+- [x] 固件 OTA、版本管理、灰度与回滚（`rgb_light` 直连 OTA 实机闭环通过：ESP32-S3 `rgb-F53324` 从 v1.0.0 经云端 100% rollout 升级到 v1.1.0；设备上报 downloading/rebooting/success，云端 ota_updates 落库 success；新固件 MQTT 上线后再确认 rollback；OTA check 接口已放开给设备拥有者 Bearer token）。
 - [ ] 门铃快照/媒体存储与索引。
 - [ ] 自动化增强：时间/多条件触发、延时与冷却。
 
@@ -317,7 +318,7 @@ Flutter App
 - `cloud_service/src/cloud_service/mqtt_bridge.py`（reported 变更回调触发自动化）
 - `cloud_service/tests/test_organization.py`（新增功能测试）
 - `cloud_service/README.md`
-- `app/lib/services/cloud_client.dart`（云端 REST 客户端；Bearer 鉴权、register/login/claim、错误文案）
+- `app/lib/services/cloud_client.dart`（云端 REST 客户端；Bearer 鉴权、register/login/claim、OTA check/updates、错误文案）
 - `app/lib/services/cloud_session.dart`（登录会话本地持久化：地址/token/user_id/email）
 - `app/lib/pages/cloud_login_page.dart`（邮箱注册/登录页）、`cloud_devices_page.dart`（`/me/devices` + 添加设备认领）、`cloud_device_detail_page.dart`
 - `app/lib/pages/root_page.dart`（底部标签 + `PopScope` 修复系统返回退出）
