@@ -22,4 +22,9 @@ CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1=y
 # HTTP(S) OTA: firmware is served over plain HTTP from the deployment server
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
+# Keep UART0 as the primary console for USB-UART adapters, and mirror logs to
+# native USB Serial/JTAG on ESP32-S3 devkits.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
 CONFIG_FREERTOS_HZ=1000

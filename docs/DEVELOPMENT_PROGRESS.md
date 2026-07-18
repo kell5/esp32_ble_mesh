@@ -6,7 +6,7 @@
 - 项目：`Mesh_esp32_farmely`
 - GitHub：`https://github.com/kell5/esp32_ble_mesh`
 - 主分支：`main`
-- 最近更新：`2026-07-14`
+- 最近更新：`2026-07-18`
 - 当前开发主题：BLE Mesh + Wi-Fi 网关硬件联调
 - 下一阶段规划：见 `docs/PRODUCT_ARCHITECTURE_AND_ROADMAP.md`（账号优先 UX、配网即绑定、WebRTC 媒体、OTA、协议规约；已按模块解耦成可并行任务）
 
@@ -241,7 +241,7 @@ Flutter App
 - [x] 部署到自有服务器：`Dockerfile` + `docker-compose.yml`（容器仅监听 `127.0.0.1:8000`），Nginx 反代 `https://lk-mcu.online/cloud/` 复用现有 Let's Encrypt 证书，已上线连真实 broker。
 - [x] Ruff 通过；28 个测试通过（含账号鉴权与隔离、门铃事件）。
 - [ ] 生产 broker ACL、凭据轮换；账号体系生产化（token 过期/刷新、邮箱验证、限流）。
-- [ ] 固件 OTA、版本管理、灰度与回滚（服务端与 `rgb_light` 直连 OTA 闭环代码已完成：sha256 校验、MQTT 进度、版本成功确认、回滚确认点后移；云端 53 项测试通过，固件编译/实机 OTA 待 IDF 环境恢复后验证）。
+- [x] 固件 OTA、版本管理、灰度与回滚（`rgb_light` 直连 OTA 实机闭环通过：ESP32-S3 `rgb-F53324` 从 v1.0.0 经云端 100% rollout 升级到 v1.1.0；设备上报 downloading/rebooting/success，云端 ota_updates 落库 success；新固件 MQTT 上线后再确认 rollback）。
 - [ ] 门铃快照/媒体存储与索引。
 - [ ] 自动化增强：时间/多条件触发、延时与冷却。
 

@@ -223,8 +223,9 @@
 - 依赖：无（固件侧）。边界：门铃 BLE 配网特征。
 - 验收自检：配网流程中 App 能读到 `device_id`；配网成功后设备上线并被自动 claim（联调 T-APP-ADDDEV）。
 
-#### T-FW-OTA-HTTPS — 直连设备 esp_https_ota + 双分区回滚
-- 依赖：T-CLOUD-3。状态：`rgb_light` 已实现直连样例（云端下发 url/sha256/fw_version/msg_id；设备流式校验 sha256；MQTT 上报 downloading/success/failed；新固件 MQTT 上线后再确认 rollback）。验收自检仍需在可用 ESP-IDF 环境下重新 build/flash，并做真实板 OTA 成功/失败回滚。
+#### T-FW-OTA-HTTPS — 直连设备 esp_https_ota + 双分区回滚 ✅ 已完成（直连样例）
+- 依赖：T-CLOUD-3。状态：`rgb_light` 已实现并实机验证直连 OTA 样例（云端下发 url/sha256/fw_version/msg_id；设备流式校验 sha256；MQTT 上报 downloading/rebooting/success/failed；新固件 MQTT 上线后再确认 rollback）。
+- 结果：2026-07-18，ESP32-S3 `rgb-F53324` 从 v1.0.0 OTA 到 v1.1.0，串口确认从 `ota_1` 启动，云端 `ota_updates` 记录落为 success。后续产品化增量为固件签名、失败回滚专项压测与 Mesh OTA。
 
 #### T-FW-OTA-MESH — Mesh OTA（root 下载 + 分发 + 子节点回滚）
 - 依赖：T-CLOUD-3。验收自检：网关下所有子节点可分批升级、失败回滚、异构镜像不错刷。

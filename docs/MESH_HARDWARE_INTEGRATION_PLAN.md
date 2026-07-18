@@ -299,4 +299,6 @@ COM6 WROOM 作为第二灯节点；COM14、COM15 不再作为活动串口。
 - 固件托管：服务器 nginx `/www/wwwroot/114.55.208.72/firmware/`，HTTP 直链 http://114.55.208.72/firmware/rgb_light_v11.bin（站点 https 重定向对 /firmware/ 路径豁免）。
 - 云端已注册 firmware fw-9103b97c…（1.1.0）+ rollout 100%：设备上报 1.0.0 后云自动下发 OTA。
 - App：MeshDevice 新增 colorHex；灯详情页对上报 color 的设备显示九宫格色板，发布 color:#RRGGBB 到 office/light/node/<id>/cmd。
-- 验证：云端 `python -m unittest discover -s tests -v` 53 项通过，`ruff check src tests` 通过。当前机器 ESP-IDF 环境导出失败（VS Code 扩展 export.ps1 指向缺失的 `G:\tools\idf.py`），因此 rgb_light 固件编译与真实板 OTA 仍需明天在可用 IDF 环境/实机上继续验证。
+- 2026-07-18 实机验证：ESP-IDF v6.0.1 环境恢复后，`rgb-F53324`（ESP32-S3 N16R8 / COM14 / MAC e0:72:a1:f5:33:24）完成 BLE 配网、MQTT 上线和云端 OTA 闭环。v1.0.0 基线（无 color capability）收到 `down/ota` 后从 `http://114.55.208.72/firmware/rgb_light_v11.bin` 下载 v1.1.0，流式 sha256 校验通过，写入 `ota_1`，重启后串口确认 `App version: 1.1.0`，MQTT 上报 `status=success`，云端 `ota_updates` 记录落为 success。
+- 2026-07-18 修复项：App 侧新增 `Light-` 前缀识别，选中 RGB 灯时自动使用 PoP `light1234`，不影响原有 `Gateway-`/Doorbell 配网口令；OTA 客户端修正 `esp_https_ota_perform()` 循环，`ESP_ERR_HTTPS_OTA_IN_PROGRESS` 作为继续下载状态而非失败；IDF 6 下 sha256 校验改用 PSA Crypto API；ESP32-S3 日志保留 UART0 主输出并开启 USB Serial/JTAG 副输出。
+- 当前线上固件：`rgb_light_v11.bin` sha256 = `861487fb6d7822d1ba5fd90edd63d83025a4df9520bf6e20c959894d154f31c8`；云端服务 `/health` 正常且 MQTT connected。

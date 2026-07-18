@@ -39,8 +39,10 @@ class AppConfig {
   // ---- Unified BLE/SoftAP WiFi provisioning ----
   static const String doorbellProvPrefix = 'Doorbell-';
   static const String gatewayProvPrefix = 'Gateway-';
+  static const String lightProvPrefix = 'Light-';
   static const String doorbellProvPop = 'doorbell1234';
   static const String gatewayProvPop = 'gateway1234';
+  static const String lightProvPop = 'light1234';
   static const String provHost = '192.168.4.1';
 
   // ---- BLE-Mesh light control (matches internal_communication/ firmware) ----

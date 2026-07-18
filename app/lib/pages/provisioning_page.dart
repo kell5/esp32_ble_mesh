@@ -66,6 +66,16 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
     return name.isEmpty ? device.remoteId.str : name;
   }
 
+  String _popForDeviceName(String name) {
+    if (name.startsWith(AppConfig.gatewayProvPrefix)) {
+      return AppConfig.gatewayProvPop;
+    }
+    if (name.startsWith(AppConfig.lightProvPrefix)) {
+      return AppConfig.lightProvPop;
+    }
+    return AppConfig.doorbellProvPop;
+  }
+
   Future<bool> _requestBlePermissions() async {
     if (Platform.isAndroid) {
       final statuses = await [
@@ -134,9 +144,7 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
     final name = _deviceName(device);
     setState(() {
       _device = device;
-      _pop.text = name.startsWith(AppConfig.gatewayProvPrefix)
-          ? AppConfig.gatewayProvPop
-          : AppConfig.doorbellProvPop;
+      _pop.text = _popForDeviceName(name);
       _status = '已选择 $name，可扫描该设备附近的 WiFi。';
     });
   }
@@ -342,12 +350,8 @@ class _ProvisioningPageState extends State<ProvisioningPage> {
                     _host.text = AppConfig.provHost;
                   } else {
                     final device = _device;
-                    _pop.text =
-                        (device != null &&
-                            _deviceName(
-                              device,
-                            ).startsWith(AppConfig.gatewayProvPrefix))
-                        ? AppConfig.gatewayProvPop
+                    _pop.text = device != null
+                        ? _popForDeviceName(_deviceName(device))
                         : AppConfig.doorbellProvPop;
                   }
                 });

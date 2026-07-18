@@ -12,7 +12,7 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "nvs.h"
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 
 static const char *TAG = "app_ota";
 static const char *NVS_NAMESPACE = "ota";
@@ -30,8 +30,9 @@ typedef struct {
 } ota_request_t;
 
 typedef struct {
-    mbedtls_sha256_context sha_ctx;
+    psa_hash_operation_t sha_op;
     bool sha_started;
+    bool sha_failed;
 } ota_hash_t;
 
 void app_ota_set_status_callback(app_ota_status_cb_t cb)
@@ -98,9 +99,13 @@ static esp_err_t http_event_handler(esp_http_client_event_t *event)
         return ESP_OK;
     }
     if (event->event_id == HTTP_EVENT_ON_DATA && event->data != NULL && event->data_len > 0) {
-        mbedtls_sha256_update(&hash->sha_ctx,
-                              (const unsigned char *)event->data,
-                              (size_t)event->data_len);
+        psa_status_t status = psa_hash_update(&hash->sha_op,
+                                              (const uint8_t *)event->data,
+                                              (size_t)event->data_len);
+        if (status != PSA_SUCCESS) {
+            hash->sha_failed = true;
+            return ESP_FAIL;
+        }
     }
     return ESP_OK;
 }
@@ -184,8 +189,18 @@ static void ota_task(void *arg)
     }
 
     if (have_expected_sha) {
-        mbedtls_sha256_init(&hash.sha_ctx);
-        mbedtls_sha256_starts(&hash.sha_ctx, 0);
+        psa_status_t status = psa_crypto_init();
+        if (status == PSA_SUCCESS) {
+            hash.sha_op = psa_hash_operation_init();
+            status = psa_hash_setup(&hash.sha_op, PSA_ALG_SHA_256);
+        }
+        if (status != PSA_SUCCESS) {
+            ESP_LOGE(TAG, "failed to start sha256: %d", (int)status);
+            publish_status(request, "failed", "sha256_start_failed");
+            free(request);
+            s_running = false;
+            vTaskDelete(NULL);
+        }
         hash.sha_started = true;
     }
 
@@ -201,7 +216,7 @@ static void ota_task(void *arg)
     };
 
     esp_err_t err = esp_https_ota_begin(&ota_cfg, &handle);
-    while (err == ESP_OK) {
+    while (err == ESP_OK || err == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         err = esp_https_ota_perform(handle);
         if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
             break;
@@ -210,18 +225,27 @@ static void ota_task(void *arg)
     if (err == ESP_OK && !esp_https_ota_is_complete_data_received(handle)) {
         err = ESP_ERR_INVALID_SIZE;
     }
+    if (err == ESP_OK && hash.sha_failed) {
+        err = ESP_FAIL;
+    }
     if (err == ESP_OK && have_expected_sha) {
         uint8_t actual_sha[32];
-        mbedtls_sha256_finish(&hash.sha_ctx, actual_sha);
-        mbedtls_sha256_free(&hash.sha_ctx);
+        size_t actual_len = 0;
+        psa_status_t status = psa_hash_finish(&hash.sha_op,
+                                              actual_sha,
+                                              sizeof(actual_sha),
+                                              &actual_len);
         hash.sha_started = false;
-        if (memcmp(actual_sha, expected_sha, sizeof(actual_sha)) != 0) {
+        if (status != PSA_SUCCESS || actual_len != sizeof(actual_sha)) {
+            ESP_LOGE(TAG, "failed to finish sha256: %d", (int)status);
+            err = ESP_FAIL;
+        } else if (memcmp(actual_sha, expected_sha, sizeof(actual_sha)) != 0) {
             ESP_LOGE(TAG, "OTA sha256 mismatch");
             err = ESP_ERR_INVALID_CRC;
         }
     }
     if (hash.sha_started) {
-        mbedtls_sha256_free(&hash.sha_ctx);
+        psa_hash_abort(&hash.sha_op);
         hash.sha_started = false;
     }
     if (err == ESP_OK) {
