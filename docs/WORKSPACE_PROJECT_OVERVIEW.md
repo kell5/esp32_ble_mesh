@@ -122,5 +122,5 @@ git restore --staged .
 
 1. App 设备页 OTA 已能“检查更新”，下一步可增加更清晰的升级进度轮询/倒计时提示。
 2. 为门铃、网关固件补齐与 `rgb_light` 同样的 `product_id / hw_version / fw_version / capabilities` 上报，再按 `docs/PRODUCT_INTEGRATION_GUIDE.md` 接入 OTA。
-3. 清理历史构建产物、日志、截图和误引入示例目录，完善 `.gitignore`，降低后续误提交风险。
+3. APK 发布在个人网站 `https://www.lk-mcu.online/product-yinghuo-zhilian.html`，GitHub 源码仓库只保留下载链接和构建说明。
 4. 产品化前补固件签名、HTTPS 固件下载、broker ACL/TLS、账号 token 过期/刷新。

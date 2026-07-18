@@ -1,6 +1,15 @@
 # ESP32 智能门铃与 Mesh 智能家居
 
-本仓库包含 Flutter 智能家居 App、ESP32-S3 可视门铃、ESP-WIFI-MESH 网关/节点、云端设备模型和 MJPEG 公网中继。
+本仓库是 **萤火智联** 的 ESP32 智能家居开源工程，包含 Flutter 智能家居 App、ESP32-S3 可视门铃、ESP-WIFI-MESH 网关/节点、RGB 灯直连样例、云端设备模型、OTA 服务和 MJPEG 公网中继。
+
+## APK 与源码下载
+
+- Android APK：[`https://www.lk-mcu.online/downloads/yinghuo-zhilian-mesh-app-release.apk`](https://www.lk-mcu.online/downloads/yinghuo-zhilian-mesh-app-release.apk)
+- 项目展示页：[`https://www.lk-mcu.online/product-yinghuo-zhilian.html`](https://www.lk-mcu.online/product-yinghuo-zhilian.html)
+- 固定通信协议：[`docs/COMMUNICATION_PROTOCOL.md`](docs/COMMUNICATION_PROTOCOL.md)
+- 新产品/旧产品升级接入清单：[`docs/PRODUCT_INTEGRATION_GUIDE.md`](docs/PRODUCT_INTEGRATION_GUIDE.md)
+
+当前 APK 是硬件联调/演示用 release 包；生产分发前仍建议配置正式签名、版本号、渠道和隐私合规说明。
 
 ## 新会话/任务交接
 

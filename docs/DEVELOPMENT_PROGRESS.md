@@ -239,6 +239,7 @@ Flutter App
 - [x] App 注册/登录页（邮箱+密码，登录/注册切换）+ 只存 服务器地址/Bearer token/user_id/email；「云端」页支持「添加设备」（输入设备 ID 认领）。
 - [x] App 设备详情页新增 OTA 卡片：显示当前 `fw_version`、`product_id`、`hw_version`、最近升级任务，并支持当前账号对自己名下设备触发“检查更新”。
 - [x] 固化后续新产品/旧产品升级通信协议：新增 `docs/COMMUNICATION_PROTOCOL.md`（Farmely MQTT/Shadow/OTA v1）和 `docs/PRODUCT_INTEGRATION_GUIDE.md`（产品身份、固件/App/云端/OTA checklist）；根 README 与工作区总览已指向固定协议入口。
+- [x] 仓库清理与 APK 发布：已清理本地未跟踪/忽略的临时构建产物、日志、截图和 AI scratch；APK 改为发布在个人网站，GitHub 源码仓库只挂官网下载链接。
 - [x] App 修复 Android 系统返回键直接退出：先弹内层页面 → 切回首个标签 → 再弹确认框退出（`PopScope` + 每标签独立 Navigator）。
 - [x] 部署到自有服务器：`Dockerfile` + `docker-compose.yml`（容器仅监听 `127.0.0.1:8000`），Nginx 反代 `https://lk-mcu.online/cloud/` 复用现有 Let's Encrypt 证书，已上线连真实 broker。
 - [x] Ruff 通过；28 个测试通过（含账号鉴权与隔离、门铃事件）。
