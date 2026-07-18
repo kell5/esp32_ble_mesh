@@ -267,6 +267,8 @@ location ^~ /cloud/ {
 
 ## MQTT 协议规范（T-CLOUD-2）
 
+完整固定协议见仓库根目录的 [`docs/COMMUNICATION_PROTOCOL.md`](../docs/COMMUNICATION_PROTOCOL.md)；新增产品和旧产品升级清单见 [`docs/PRODUCT_INTEGRATION_GUIDE.md`](../docs/PRODUCT_INTEGRATION_GUIDE.md)。本节只保留云端当前实现摘要。
+
 设备注册支持 `capabilities: string[]`，例如 `["onoff", "doorbell.ring"]`。未上报能力的旧设备会返回空数组；`GET /api/v1/me/devices`、`GET /api/v1/devices/{id}` 和 shadow 响应都会带 `capabilities`，便于 App 按能力渲染控件。
 
 规范化 topic 使用：

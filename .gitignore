@@ -43,9 +43,15 @@ cloud_service/**/*.db*
 .vscode/
 .idea/
 .reasonix/
+reasonix.toml
 .devin-bridge/
+.devin/
+.devin-scratch/
+_shots/
+对话记录/
 .DS_Store
 *.log
+*.err
 *.out.log
 
 # ===== dev/debug helpers & scratch (local only, not committed) =====
@@ -56,3 +62,33 @@ app/*.png
 # Local source artwork and generated per-target configs
 app/image/
 **/sdkconfig.*.generated
+
+# Local ESP-IDF example drops. The curated tracked BLE Mesh files stay tracked;
+# these patterns only keep newly copied example trees and CI configs out of
+# normal feature commits.
+esp_ble_mesh/README.md
+esp_ble_mesh/provisioner/README.md
+esp_ble_mesh/aligenie_demo/
+esp_ble_mesh/common_components/button/
+esp_ble_mesh/common_components/example_nvs/
+esp_ble_mesh/common_components/fast_prov/
+esp_ble_mesh/common_components/light_driver/
+esp_ble_mesh/directed_forwarding/
+esp_ble_mesh/fast_provisioning/
+esp_ble_mesh/onoff_models/onoff_client/
+esp_ble_mesh/onoff_models/onoff_server/tutorial/
+esp_ble_mesh/provisioner/tutorial/
+esp_ble_mesh/remote_provisioning/
+esp_ble_mesh/sensor_models/
+esp_ble_mesh/vendor_models/
+esp_ble_mesh/wifi_coexist/
+esp_ble_mesh/**/.devin-*
+esp_ble_mesh/**/.sdkcfg-*
+esp_ble_mesh/**/sdkconfig.ci.*
+esp_ble_mesh/**/sdkconfig.defaults.esp32
+esp_ble_mesh/**/sdkconfig.defaults.esp32c3
+esp_ble_mesh/**/sdkconfig.defaults.esp32c6
+esp_ble_mesh/**/sdkconfig.defaults.esp32h2
+
+# Local one-off hardware helpers
+rgb_light/serial_mon.py

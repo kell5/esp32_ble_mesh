@@ -4,9 +4,14 @@
 
 ## 新会话/任务交接
 
-**继续开发前先读：[`docs/DEVELOPMENT_PROGRESS.md`](docs/DEVELOPMENT_PROGRESS.md)**。
+继续开发前建议按这个顺序读：
 
-该文档记录当前阶段、硬件串口、协议、构建结果、遗留问题和下一步。完成任何阶段后同步更新它。
+1. [`docs/WORKSPACE_PROJECT_OVERVIEW.md`](docs/WORKSPACE_PROJECT_OVERVIEW.md)：当前工作区总览、目录职责、验证命令和提交纪律。
+2. [`docs/COMMUNICATION_PROTOCOL.md`](docs/COMMUNICATION_PROTOCOL.md)：固定通信协议，新增产品和旧产品升级必须优先遵守。
+3. [`docs/PRODUCT_INTEGRATION_GUIDE.md`](docs/PRODUCT_INTEGRATION_GUIDE.md)：新产品/旧产品 OTA 接入清单。
+4. [`docs/DEVELOPMENT_PROGRESS.md`](docs/DEVELOPMENT_PROGRESS.md)：详细进度、硬件串口、构建结果、遗留问题和下一步。
+
+完成任何阶段后同步更新总览、协议相关说明和进度文档。
 
 ## 目录
 
@@ -16,6 +21,8 @@
 - `server_relay/`：Python MJPEG 公网中继。
 - `cloud_service/`：设备注册、用户绑定、设备影子和 MQTT 兼容桥接。
 - `docs/DEVICE_ASSET_STATUS.md`：已识别图片、缺失素材、App 映射、固件设备类型协议和测试步骤。
+- `docs/COMMUNICATION_PROTOCOL.md`：Farmely MQTT/Shadow/OTA 统一协议。
+- `docs/PRODUCT_INTEGRATION_GUIDE.md`：后续新增门铃、网关、灯、传感器等产品的接入 checklist。
 - `docs/APP_DEVICE_ICON_PROMPTS.md`：App 设备图标视觉规范。
 - `docs/SINGLE_DEVICE_ICON_PROMPTS.md`：逐张生成时可直接复制的完整提示词。
 

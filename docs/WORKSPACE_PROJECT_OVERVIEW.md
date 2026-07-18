@@ -1,6 +1,6 @@
 # 工作区项目总览（2026-07-18）
 
-本文件用于快速接手 `G:\Mesh_esp32_farmely`。详细历史仍以 `docs/DEVELOPMENT_PROGRESS.md`、`docs/MESH_HARDWARE_INTEGRATION_PLAN.md` 和各子项目 README 为准。
+本文件用于快速接手 `G:\Mesh_esp32_farmely`。通信协议以 `docs/COMMUNICATION_PROTOCOL.md` 为准；新产品/旧产品升级按 `docs/PRODUCT_INTEGRATION_GUIDE.md` 的清单执行；详细历史仍以 `docs/DEVELOPMENT_PROGRESS.md`、`docs/MESH_HARDWARE_INTEGRATION_PLAN.md` 和各子项目 README 为准。
 
 ## 当前主线
 
@@ -46,6 +46,11 @@
 - 下发：设备上报版本后云端发布 `farmely/<class>/<device_id>/down/ota`。
 - 回报：设备通过 `farmely/<class>/<device_id>/up/ota` 回报 `downloading / success / failed`，云端写入 `ota_updates`。
 - App：设备详情页可查询 OTA 任务历史，并对自己名下设备触发“检查更新”。
+
+固定协议入口：
+
+- MQTT/Shadow/OTA 规范：`docs/COMMUNICATION_PROTOCOL.md`
+- 新产品接入与旧产品升级清单：`docs/PRODUCT_INTEGRATION_GUIDE.md`
 
 ### RGB 灯实测
 
@@ -116,6 +121,6 @@ git restore --staged .
 ## 近期建议
 
 1. App 设备页 OTA 已能“检查更新”，下一步可增加更清晰的升级进度轮询/倒计时提示。
-2. 为门铃、网关固件补齐与 `rgb_light` 同样的 `product_id / hw_version / fw_version / capabilities` 上报，再接入 OTA。
+2. 为门铃、网关固件补齐与 `rgb_light` 同样的 `product_id / hw_version / fw_version / capabilities` 上报，再按 `docs/PRODUCT_INTEGRATION_GUIDE.md` 接入 OTA。
 3. 清理历史构建产物、日志、截图和误引入示例目录，完善 `.gitignore`，降低后续误提交风险。
 4. 产品化前补固件签名、HTTPS 固件下载、broker ACL/TLS、账号 token 过期/刷新。
