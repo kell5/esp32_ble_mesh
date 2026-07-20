@@ -13,6 +13,7 @@
 - BLE Mesh 网关和灯节点控制链路。
 - 云端 FastAPI + SQLite + MQTT bridge：设备注册、账号认领、设备影子、房间/分组/场景/自动化、OTA。
 - `rgb_light` ESP32-S3 直连 OTA：`rgb-F53324` 已从 v1.0.0 OTA 到 v1.1.0，云端记录为 success。
+- 本次准备发版的 RGB 灯版本是 `v1.2.0`：上电后 GPIO48 会先闪 10 次，之后仍然可以直接在 App 里点“检查更新”走 OTA。
 
 ## 目录职责
 
@@ -60,6 +61,7 @@
 - 线上固件：`http://114.55.208.72/firmware/rgb_light_v11.bin`
 - 当前 SHA256：`861487fb6d7822d1ba5fd90edd63d83025a4df9520bf6e20c959894d154f31c8`
 - 验收结果：设备下载、校验、写入 `ota_1`、重启、上报 v1.1.0 和 OTA success；云端记录 success。
+- App 里更新时只要给板子供电即可，具体步骤见 [`docs/RGB_LIGHT_OTA_APP_GUIDE.md`](RGB_LIGHT_OTA_APP_GUIDE.md)。
 
 ## 常用验证命令
 
@@ -94,7 +96,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 & 'D:\esp-idf\v6.0.1\esp-idf\export.ps1'
 cd rgb_light
 idf.py -B build_ota_v1_uart -DSDKCONFIG=build_ota_v1_uart\sdkconfig -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkcfg-nocolor' -D PROJECT_VER=1.0.0 build
-idf.py -B build_ota_v11_uart -DSDKCONFIG=build_ota_v11_uart\sdkconfig -DSDKCONFIG_DEFAULTS='sdkconfig.defaults' -D PROJECT_VER=1.1.0 build
+idf.py -B build_ota_v11_uart -DSDKCONFIG=build_ota_v11_uart\sdkconfig -DSDKCONFIG_DEFAULTS='sdkconfig.defaults' -D PROJECT_VER=1.2.0 build
 idf.py -B build_ota_v1_uart -p COM14 flash
 ```
 

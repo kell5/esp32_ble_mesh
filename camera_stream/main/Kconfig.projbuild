@@ -43,6 +43,18 @@ menu "Camera Stream Configuration"
         string "MQTT client id"
         default "esp32s3_doorbell"
 
+    config EXAMPLE_PRODUCT_ID
+        string "Product id"
+        default "doorbell"
+        help
+            Product id reported to cloud OTA and the device detail page.
+
+    config EXAMPLE_HW_VERSION
+        string "Hardware version"
+        default "rev-a"
+        help
+            Hardware revision reported together with fw_version.
+
     config EXAMPLE_DOORBELL_ID
         string "Doorbell device id"
         default "door-001"

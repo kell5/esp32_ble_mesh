@@ -13,15 +13,15 @@
 ## 0. 2026-07-14 当前联调状态
 
 - 当前先完成固件和硬件 Mesh 联调，Flutter App 暂不联调；App 仍为 PR #4 合并后的版本，尚未接入 BLE Mesh 新网关的发现、设备映射与控制界面。
-- 本轮物理验收映射：COM4、COM8 为 ESP32-S3，COM7 为 ESP32-WROOM；摄像头门铃已拔下、不参与测试。COM6 是 WROOM 的历史串口号，串口号随插拔变化，后续必须继续用芯片型号、MAC 和启动日志确认角色。COM14、COM15 存在串口/启动异常，不再作为活动端口。
-- 串口号不固定代表产品角色；COM4/COM8 可在读取芯片信息确认后分别刷成网关或普通节点，当前保持 COM4 网关、COM8 节点。
+- 本轮物理验收映射：COM4、COM8、COM14 为 ESP32-S3，COM7 为 ESP32-WROOM；摄像头门铃已拔下、不参与测试。COM6 是 WROOM 的历史串口号，串口号随插拔变化，后续必须继续用芯片型号、MAC 和启动日志确认角色。COM14 先前曾被误记为异常端口，后已确认可正常作为灯控节点烧录口。
+- 串口号不固定代表产品角色；COM4/COM8/COM14 可在读取芯片信息确认后分别刷成网关或普通节点，当前保持 COM4 网关、COM8 节点、COM14 节点测试口。
 - COM4 已确认是 ESP32-S3 N16R8，作为 Provisioner、Config Client、Generic OnOff Client 和未来 Wi-Fi/MQTT 网关。
 - COM8 已确认是 ESP32-S3 N16R8，替代无法启动应用的 COM14 完成双板联调。
 - COM4 + COM8 已完成未配网发现、Provisioning、Composition Data Get、AppKey Add、Generic OnOff Server Model Bind、Generic OnOff Get/Set/Status：
   - COM4：`farmely_mesh:stage=8, addr=5, onoff=1`；
   - COM8：`farmely_node:stage=7, addr=5, onoff=1`。
 - 保留 NVS 重刷网关后，COM4 自动查询已配网节点并达到 `stage=9, addr=5`；双方 NetKey/AppKey/节点信息仍存在，未重复 Provisioning。
-- COM14 固件写入和校验成功，但应用级 NVS 始终为空；同一节点固件在 COM4 可运行，故记录为 COM14 启动/复位路径阻塞，不记录为 BLE Mesh 射频失败。
+- COM14 已重新识别为 ESP32-S3 节点测试口，并已成功烧录节点固件；此前“启动/复位路径阻塞”的判断已修正，不再作为当前结论。
 - 网关已加入可配置 Wi-Fi STA、MQTT 自动重连、normalized/legacy topic 订阅、MQTT→BLE Generic OnOff、状态与 ACK 回传代码；固件构建成功并刷入 COM4。由于未配置 Wi-Fi/MQTT 凭据，联网、云端闭环和 30 分钟共存压力尚未验收。
 - 节点已写入“恢复已保存 OnOff 与配网阶段”的本地修改；S3 固件 836240 bytes、WROOM 固件 811424 bytes，app 分区分别剩余 46% 和 47%。
 - COM8 已刷入最新 S3 节点固件，保持地址 `0x0005` 和已配网状态；最新生产 fresh Get 为 `onoff=1`。
@@ -274,7 +274,7 @@ Flutter App
 | Cloud service | Ruff 通过；28 个测试通过（含账号鉴权/隔离、门铃事件、房间/分组/场景/自动化） | `cloud_service/` |
 | 门铃 ESP32-S3 | 通过 | `camera_stream/build/`；app 分区剩余 13% |
 | Mesh 网关 ESP32-S3 | 通过 | `internal_communication/build-gateway/`；app 分区剩余 13% |
-| Mesh 节点 ESP32 | 通过 | `internal_communication/build-node/`；app 分区只剩 1%，需关注 |
+| Mesh 节点 ESP32-S3 | 通过 | `internal_communication/build-node/`；已可用 `COM14` 烧录，app 分区按 S3 节点配置可继续验证 |
 
 关键构建配置：
 

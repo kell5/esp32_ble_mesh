@@ -208,6 +208,18 @@ menu "Example Configuration"
         default "valve" if MESH_DEVICE_TYPE_VALVE
         default "door_lock" if MESH_DEVICE_TYPE_DOOR_LOCK
 
+    config MESH_PRODUCT_ID
+        string "Mesh product id"
+        default "mesh_light"
+        help
+            Product identifier reported to cloud OTA and device shadow.
+
+    config MESH_HW_VERSION
+        string "Mesh hardware version"
+        default "rev-a"
+        help
+            Hardware revision reported together with fw_version.
+
     config MESH_GATEWAY_PROVISIONING
         bool "Enable BLE WiFi provisioning for this gateway build"
         default n

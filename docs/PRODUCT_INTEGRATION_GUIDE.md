@@ -113,3 +113,15 @@ POST /api/v1/rollouts
 | 门铃 | 补 `product_id/hw_version/fw_version`，再接 `system.ota` 和门铃固件 OTA。 |
 | Mesh 网关 | 补网关自身三元组；明确网关固件与子节点固件是否分开 OTA。 |
 | Mesh 灯节点 | 补节点产品三元组；如通过网关升级，需新增网关到节点的 OTA 转发协议。 |
+
+## RGB 灯 App 内升级说明
+
+详细操作步骤见 [`docs/RGB_LIGHT_OTA_APP_GUIDE.md`](RGB_LIGHT_OTA_APP_GUIDE.md)。
+
+简版流程：
+
+1. 设备只要上电即可。
+2. 在 App 里进入灯的设备详情页。
+3. 点“检查更新”。
+4. 云端下发 OTA，设备自动下载并重启。
+5. 上电后先闪 10 次的是新固件；这只是启动确认，不影响原有控制功能。

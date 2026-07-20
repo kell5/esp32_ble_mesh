@@ -1,6 +1,8 @@
 #include "app_light.h"
 
 #include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "led_strip.h"
 #include "sdkconfig.h"
@@ -49,6 +51,21 @@ void app_light_set_on(bool on)
     s_on = on;
     refresh();
     ESP_LOGI(TAG, "light %s", on ? "on" : "off");
+}
+
+void app_light_boot_blink(uint8_t times, uint32_t on_ms, uint32_t off_ms)
+{
+    if (times == 0 || s_strip == NULL) {
+        return;
+    }
+    for (uint8_t i = 0; i < times; ++i) {
+        app_light_set_on(true);
+        vTaskDelay(pdMS_TO_TICKS(on_ms));
+        app_light_set_on(false);
+        if (i + 1 < times) {
+            vTaskDelay(pdMS_TO_TICKS(off_ms));
+        }
+    }
 }
 
 bool app_light_is_on(void)

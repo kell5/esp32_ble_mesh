@@ -2,3 +2,6 @@
 # Brownout detector disabled as a fallback for marginal USB power on this bench node.
 # WARNING: removes under-voltage flash protection; only for the node build, gateway (S3) unaffected.
 CONFIG_ESP_BROWNOUT_DET=n
+CONFIG_MESH_PRODUCT_ID="mesh_light"
+CONFIG_MESH_HW_VERSION="rev-a"
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

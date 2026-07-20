@@ -58,6 +58,7 @@ void app_main(void)
     ESP_LOGI(TAG, "firmware %s", esp_app_get_description()->version);
 
     ESP_ERROR_CHECK(app_light_init());
+    app_light_boot_blink(10, 120, 120);
 
     if (xTaskCreate(prov_button_task, "prov_btn", 2560, NULL, 4, NULL) != pdPASS) {
         ESP_LOGW(TAG, "failed to start provisioning button task");

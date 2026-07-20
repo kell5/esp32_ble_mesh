@@ -5,6 +5,7 @@ idf_component_register(
         "app_camera.c"
         "app_httpd.c"
         "app_mqtt.c"
+        "app_ota.c"
         "app_relay.c"
         "app_doorbell.c"
     INCLUDE_DIRS "."
@@ -21,4 +22,8 @@ idf_component_register(
         mqtt
         esp32-camera
         network_provisioning
+        app_update
+        esp_https_ota
+        esp_http_client
+        mbedtls
 )

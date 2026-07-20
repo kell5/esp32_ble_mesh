@@ -34,7 +34,15 @@
 #define MESH_TOKEN_VALUE        (0xbeef)
 #define MESH_CONTROL_CMD        (0x2)
 #define MESH_STATUS_CMD         (0x3)   /* node -> root: per-node status report */
+#define MESH_OTA_CMD            (0x4)   /* root -> node: OTA request */
+#define MESH_OTA_STATUS_CMD     (0x5)   /* node -> root: OTA progress/result */
 #define MESH_DEVICE_TYPE_MAX_LEN (24)
+#define MESH_PRODUCT_ID_MAX_LEN  (32)
+#define MESH_HW_VERSION_MAX_LEN   (32)
+#define MESH_FW_VERSION_MAX_LEN   (64)
+#define MESH_OTA_URL_MAX_LEN      (256)
+#define MESH_OTA_MSG_ID_MAX_LEN   (128)
+#define MESH_OTA_DETAIL_MAX_LEN   (96)
 
 /*******************************************************
  *                Structures
@@ -52,11 +60,36 @@ typedef struct {
 typedef struct {
     uint8_t cmd;        /* MESH_STATUS_CMD */
     uint8_t on;         /* current on/off state */
-    uint8_t mac[6];     /* node STA MAC — identity */
+    uint8_t mac[6];     /* node STA MAC – identity */
     uint8_t layer;      /* mesh layer */
     uint8_t is_root;    /* 1 if this node is the root */
     char device_type[MESH_DEVICE_TYPE_MAX_LEN];
+    char product_id[MESH_PRODUCT_ID_MAX_LEN];
+    char hw_version[MESH_HW_VERSION_MAX_LEN];
+    char fw_version[MESH_FW_VERSION_MAX_LEN];
 } mesh_light_status_t;
+
+typedef struct {
+    uint8_t cmd;        /* MESH_OTA_CMD */
+    uint8_t reserved;
+    uint8_t mac[6];     /* sender identity */
+    char url[MESH_OTA_URL_MAX_LEN];
+    char sha256[65];
+    char fw_version[MESH_FW_VERSION_MAX_LEN];
+    char ota_msg_id[MESH_OTA_MSG_ID_MAX_LEN];
+    char product_id[MESH_PRODUCT_ID_MAX_LEN];
+    char hw_version[MESH_HW_VERSION_MAX_LEN];
+} mesh_ota_cmd_t;
+
+typedef struct {
+    uint8_t cmd;        /* MESH_OTA_STATUS_CMD */
+    uint8_t reserved;
+    uint8_t mac[6];     /* sender identity */
+    char status[16];
+    char fw_version[MESH_FW_VERSION_MAX_LEN];
+    char ota_msg_id[MESH_OTA_MSG_ID_MAX_LEN];
+    char detail[MESH_OTA_DETAIL_MAX_LEN];
+} mesh_ota_status_t;
 
 /*******************************************************
  *                Function Declarations

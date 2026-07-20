@@ -17,8 +17,10 @@
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_mesh_internal.h"
+#include "esp_app_desc.h"
 #include "mqtt_client.h"
 #include "mesh_light.h"
+#include "mesh_ota.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
 #include <time.h>
@@ -73,13 +75,14 @@ static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 static bool s_mqtt_started = false;
 static uint32_t s_status_boot_nonce = 0;
 static uint32_t s_status_sequence = 0;
-static char s_gateway_lwt_payload[384];
+static char s_gateway_lwt_payload[768];
 
 /* Gateway capabilities (used in unified-envelope publications) */
 static const char *s_gateway_capabilities[] = {
     "gateway.mesh",
     "system.fw_version",
     "system.online",
+    "system.ota",
     NULL
 };
 
@@ -99,6 +102,9 @@ typedef struct {
     uint8_t layer;
     uint8_t is_root;
     char device_type[MESH_DEVICE_TYPE_MAX_LEN];
+    char product_id[MESH_PRODUCT_ID_MAX_LEN];
+    char hw_version[MESH_HW_VERSION_MAX_LEN];
+    char fw_version[MESH_FW_VERSION_MAX_LEN];
     int64_t last_seen_us;
 } node_entry_t;
 
@@ -128,6 +134,11 @@ mesh_light_ctl_t light_off = {
 /*******************************************************
  *                Function Declarations
  *******************************************************/
+static void mesh_ota_status_callback(const char *status,
+                                     const char *fw_version,
+                                     const char *ota_msg_id,
+                                     const char *detail);
+static void publish_mesh_ota_status_to_cloud(const mesh_ota_status_t *st);
 
 /*******************************************************
  *          Per-node registry + status reporting
@@ -151,6 +162,11 @@ static void unix_ts_s(int64_t *ts)
     *ts = (now > 1730000000) ? (int64_t)now : 0;
 }
 
+static const char *firmware_version(void)
+{
+    return esp_app_get_description()->version;
+}
+
 static void caps_json(const char *caps[], char *out, size_t max)
 {
     size_t pos = 0;
@@ -166,7 +182,7 @@ static void caps_json(const char *caps[], char *out, size_t max)
 static void node_caps_json(const char *device_type, char *out, size_t max)
 {
     (void)device_type;
-    snprintf(out, max, "[\"onoff\",\"system.fw_version\",\"system.online\"]");
+    snprintf(out, max, "[\"onoff\",\"system.fw_version\",\"system.online\",\"system.ota\"]");
 }
 
 static void gateway_lwt_payload_init(const char *root_id)
@@ -176,8 +192,9 @@ static void gateway_lwt_payload_init(const char *root_id)
     char caps[128];
     caps_json(s_gateway_capabilities, caps, sizeof(caps));
     snprintf(s_gateway_lwt_payload, sizeof(s_gateway_lwt_payload),
-             "{\"version\":1,\"message_id\":\"%s\",\"online\":false,\"root\":\"%s\",\"type\":\"gateway\",\"offline_reason\":\"mqtt_lwt\",\"capabilities\":%s}",
-             message_id, root_id, caps);
+             "{\"version\":1,\"message_id\":\"%s\",\"online\":false,\"root\":\"%s\",\"type\":\"gateway\",\"product_id\":\"%s\",\"hw_version\":\"%s\",\"fw_version\":\"%s\",\"offline_reason\":\"mqtt_lwt\",\"capabilities\":%s}",
+             message_id, root_id, CONFIG_MESH_PRODUCT_ID, CONFIG_MESH_HW_VERSION,
+             firmware_version(), caps);
 }
 
 static inline void nodes_lock(void)   { if (s_nodes_mtx) xSemaphoreTake(s_nodes_mtx, portMAX_DELAY); }
@@ -203,6 +220,26 @@ static int node_find_or_add_locked(const uint8_t mac[6])
     return free_idx;
 }
 
+static int node_find_by_id_locked(const char *id, node_entry_t *snapshot)
+{
+    if (!id) {
+        return -1;
+    }
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (s_nodes[i].used) {
+            char cur[16];
+            node_id_str(s_nodes[i].mac, cur, sizeof(cur));
+            if (strcmp(cur, id) == 0) {
+                if (snapshot) {
+                    *snapshot = s_nodes[i];
+                }
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
 /* Publish one node's status (retained) to office/light/node/<id>/status.
    Reads the entry outside the lock via a caller-provided snapshot. */
 static void root_publish_node_status(const node_entry_t *n)
@@ -221,21 +258,25 @@ static void root_publish_node_status(const node_entry_t *n)
     const char *offline = n->online ? "" : ",\"offline_reason\":\"mesh_timeout\"";
     char caps[96];
     node_caps_json(n->device_type, caps, sizeof(caps));
+    const char *product_id = n->product_id[0] ? n->product_id : CONFIG_MESH_PRODUCT_ID;
+    const char *hw_version = n->hw_version[0] ? n->hw_version : CONFIG_MESH_HW_VERSION;
+    const char *fw_version = n->fw_version[0] ? n->fw_version : firmware_version();
     /* Old format (backward compatible) */
-    char payload[384];
+    char payload[512];
     snprintf(payload, sizeof(payload),
-             "{\"version\":1,\"message_id\":\"%s\",\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\",\"type\":\"%s\",\"capabilities\":%s%s}",
+             "{\"version\":1,\"message_id\":\"%s\",\"id\":\"%s\",\"online\":%s,\"state\":\"%s\",\"layer\":%d,\"role\":\"%s\",\"type\":\"%s\",\"product_id\":\"%s\",\"hw_version\":\"%s\",\"fw_version\":\"%s\",\"capabilities\":%s%s}",
              message_id, id, n->online ? "true" : "false", n->on ? "on" : "off",
-             n->layer, n->is_root ? "root" : "node", n->device_type, caps, offline);
+             n->layer, n->is_root ? "root" : "node", n->device_type,
+             product_id, hw_version, fw_version, caps, offline);
     esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 1);
     /* New format: farmely/light/<id>/up/status */
     char new_topic[80];
     snprintf(new_topic, sizeof(new_topic), "farmely/light/%s/up/status", id);
     char new_payload[768];
     snprintf(new_payload, sizeof(new_payload),
-             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"status\",\"data\":{\"online\":%s,\"state\":\"%s\",\"type\":\"%s\",\"capabilities\":%s}}",
+             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"status\",\"data\":{\"online\":%s,\"state\":\"%s\",\"type\":\"%s\",\"product_id\":\"%s\",\"hw_version\":\"%s\",\"fw_version\":\"%s\",\"capabilities\":%s}}",
              message_id, ts, n->online ? "true" : "false", n->on ? "on" : "off",
-             n->device_type, caps);
+             n->device_type, product_id, hw_version, fw_version, caps);
     esp_mqtt_client_publish(s_mqtt_client, new_topic, new_payload, 0, 1, 1);
 }
 
@@ -262,11 +303,15 @@ static void root_publish_gateway_status(void)
     status_message_id(root_id, message_id, sizeof(message_id));
     char caps[128];
     caps_json(s_gateway_capabilities, caps, sizeof(caps));
+    const char *product_id = CONFIG_MESH_PRODUCT_ID;
+    const char *hw_version = CONFIG_MESH_HW_VERSION;
+    const char *fw_version = firmware_version();
     /* Old format */
-    char payload[384];
+    char payload[512];
     snprintf(payload, sizeof(payload),
-             "{\"version\":1,\"message_id\":\"%s\",\"online\":true,\"root\":\"%s\",\"layer\":%d,\"nodes\":%d,\"online_nodes\":%d,\"heap\":%" PRId32 ",\"capabilities\":%s}",
-             message_id, root_id, mesh_layer, total, online, esp_get_minimum_free_heap_size(), caps);
+             "{\"version\":1,\"message_id\":\"%s\",\"online\":true,\"root\":\"%s\",\"layer\":%d,\"nodes\":%d,\"online_nodes\":%d,\"heap\":%" PRId32 ",\"product_id\":\"%s\",\"hw_version\":\"%s\",\"fw_version\":\"%s\",\"capabilities\":%s}",
+             message_id, root_id, mesh_layer, total, online, esp_get_minimum_free_heap_size(),
+             product_id, hw_version, fw_version, caps);
     esp_mqtt_client_publish(s_mqtt_client, MQTT_TOPIC_GATEWAY_STAT, payload, 0, 1, 1);
     /* New format */
     int64_t ts = 0;
@@ -275,8 +320,8 @@ static void root_publish_gateway_status(void)
     snprintf(new_topic, sizeof(new_topic), "farmely/gateway/%s/up/status", root_id);
     char new_payload[768];
     snprintf(new_payload, sizeof(new_payload),
-             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"status\",\"data\":{\"online\":true,\"root\":\"%s\",\"nodes\":%d,\"online_nodes\":%d,\"capabilities\":%s}}",
-             message_id, ts, root_id, total, online, caps);
+             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"status\",\"data\":{\"online\":true,\"root\":\"%s\",\"nodes\":%d,\"online_nodes\":%d,\"product_id\":\"%s\",\"hw_version\":\"%s\",\"fw_version\":\"%s\",\"capabilities\":%s}}",
+             message_id, ts, root_id, total, online, product_id, hw_version, fw_version, caps);
     esp_mqtt_client_publish(s_mqtt_client, new_topic, new_payload, 0, 1, 1);
 }
 
@@ -301,16 +346,52 @@ static void root_handle_node_status(const mesh_addr_t *from,
     s_nodes[idx].layer = st->layer;
     s_nodes[idx].is_root = st->is_root ? 1 : 0;
     memset(s_nodes[idx].device_type, 0, sizeof(s_nodes[idx].device_type));
-    if (packet_size > MESH_STATUS_BASE_SIZE) {
-        size_t available = packet_size - MESH_STATUS_BASE_SIZE;
+    if (packet_size > offsetof(mesh_light_status_t, device_type)) {
+        size_t available = packet_size - offsetof(mesh_light_status_t, device_type);
         size_t copy_len = available < sizeof(s_nodes[idx].device_type) - 1
                               ? available
                               : sizeof(s_nodes[idx].device_type) - 1;
         memcpy(s_nodes[idx].device_type, st->device_type, copy_len);
     }
+    memset(s_nodes[idx].product_id, 0, sizeof(s_nodes[idx].product_id));
+    if (packet_size > offsetof(mesh_light_status_t, product_id)) {
+        size_t available = packet_size - offsetof(mesh_light_status_t, product_id);
+        size_t copy_len = available < sizeof(s_nodes[idx].product_id) - 1
+                              ? available
+                              : sizeof(s_nodes[idx].product_id) - 1;
+        memcpy(s_nodes[idx].product_id, st->product_id, copy_len);
+    }
+    memset(s_nodes[idx].hw_version, 0, sizeof(s_nodes[idx].hw_version));
+    if (packet_size > offsetof(mesh_light_status_t, hw_version)) {
+        size_t available = packet_size - offsetof(mesh_light_status_t, hw_version);
+        size_t copy_len = available < sizeof(s_nodes[idx].hw_version) - 1
+                              ? available
+                              : sizeof(s_nodes[idx].hw_version) - 1;
+        memcpy(s_nodes[idx].hw_version, st->hw_version, copy_len);
+    }
+    memset(s_nodes[idx].fw_version, 0, sizeof(s_nodes[idx].fw_version));
+    if (packet_size > offsetof(mesh_light_status_t, fw_version)) {
+        size_t available = packet_size - offsetof(mesh_light_status_t, fw_version);
+        size_t copy_len = available < sizeof(s_nodes[idx].fw_version) - 1
+                              ? available
+                              : sizeof(s_nodes[idx].fw_version) - 1;
+        memcpy(s_nodes[idx].fw_version, st->fw_version, copy_len);
+    }
     if (s_nodes[idx].device_type[0] == '\0') {
         strlcpy(s_nodes[idx].device_type, "light_bulb",
                 sizeof(s_nodes[idx].device_type));
+    }
+    if (s_nodes[idx].product_id[0] == '\0') {
+        strlcpy(s_nodes[idx].product_id, CONFIG_MESH_PRODUCT_ID,
+                sizeof(s_nodes[idx].product_id));
+    }
+    if (s_nodes[idx].hw_version[0] == '\0') {
+        strlcpy(s_nodes[idx].hw_version, CONFIG_MESH_HW_VERSION,
+                sizeof(s_nodes[idx].hw_version));
+    }
+    if (s_nodes[idx].fw_version[0] == '\0') {
+        strlcpy(s_nodes[idx].fw_version, firmware_version(),
+                sizeof(s_nodes[idx].fw_version));
     }
     s_nodes[idx].online = true;
     s_nodes[idx].last_seen_us = esp_timer_get_time();
@@ -332,6 +413,12 @@ static void root_refresh_self(void)
         s_nodes[idx].is_root = 1;
         strlcpy(s_nodes[idx].device_type, "gateway",
                 sizeof(s_nodes[idx].device_type));
+        strlcpy(s_nodes[idx].product_id, CONFIG_MESH_PRODUCT_ID,
+                sizeof(s_nodes[idx].product_id));
+        strlcpy(s_nodes[idx].hw_version, CONFIG_MESH_HW_VERSION,
+                sizeof(s_nodes[idx].hw_version));
+        strlcpy(s_nodes[idx].fw_version, firmware_version(),
+                sizeof(s_nodes[idx].fw_version));
         s_nodes[idx].online = true;
         s_nodes[idx].last_seen_us = esp_timer_get_time();
         snapshot = s_nodes[idx];
@@ -378,6 +465,9 @@ static void send_status_upstream(void)
     };
     memcpy(st.mac, s_self_mac, 6);
     strlcpy(st.device_type, CONFIG_MESH_DEVICE_TYPE, sizeof(st.device_type));
+    strlcpy(st.product_id, CONFIG_MESH_PRODUCT_ID, sizeof(st.product_id));
+    strlcpy(st.hw_version, CONFIG_MESH_HW_VERSION, sizeof(st.hw_version));
+    strlcpy(st.fw_version, firmware_version(), sizeof(st.fw_version));
     mesh_data_t data = {
         .data = (uint8_t *)&st,
         .size = sizeof(st),
@@ -446,11 +536,27 @@ void esp_mesh_p2p_rx_main(void *arg)
         recv_count++;
         /* Dispatch by the leading command byte:
            - MESH_STATUS_CMD (upstream node report): only the root aggregates it.
+           - MESH_OTA_STATUS_CMD (node OTA progress/result): only the root publishes it.
+           - MESH_OTA_CMD (root -> node OTA request): only non-root nodes act on it.
            - otherwise treat as a light-control message and apply it locally. */
         if (data.size >= 1 && data.data[0] == MESH_STATUS_CMD) {
             if (esp_mesh_is_root() && data.size >= MESH_STATUS_BASE_SIZE) {
                 root_handle_node_status(&from, (mesh_light_status_t *)data.data,
                                         data.size);
+            }
+            continue;
+        }
+        if (data.size >= 1 && data.data[0] == MESH_OTA_STATUS_CMD) {
+            if (esp_mesh_is_root() && data.size >= sizeof(mesh_ota_status_t)) {
+                mesh_ota_status_t *st = (mesh_ota_status_t *)data.data;
+                publish_mesh_ota_status_to_cloud(st);
+            }
+            continue;
+        }
+        if (data.size >= 1 && data.data[0] == MESH_OTA_CMD) {
+            if (!esp_mesh_is_root() && data.size >= sizeof(mesh_ota_cmd_t)) {
+                mesh_ota_cmd_t *cmd = (mesh_ota_cmd_t *)data.data;
+                mesh_ota_start(cmd->url, cmd->sha256, cmd->fw_version, cmd->ota_msg_id);
             }
             continue;
         }
@@ -655,6 +761,234 @@ static void publish_ack(const char *device_id, const char *original_msg_id)
     esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 0);
 }
 
+static bool json_string_field(const char *json, const char *key, char *out, size_t max)
+{
+    if (!json || !key || !out || max == 0) {
+        return false;
+    }
+    char pattern[48];
+    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+    const char *p = strstr(json, pattern);
+    if (!p) {
+        return false;
+    }
+    p = strchr(p + strlen(pattern), ':');
+    if (!p) {
+        return false;
+    }
+    p++;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+        p++;
+    }
+    if (*p != '"') {
+        return false;
+    }
+    p++;
+    const char *e = strchr(p, '"');
+    if (!e || e <= p) {
+        return false;
+    }
+    size_t len = (size_t)(e - p);
+    if (len >= max) {
+        len = max - 1;
+    }
+    memcpy(out, p, len);
+    out[len] = '\0';
+    return true;
+}
+
+static void publish_mesh_ota_status_to_cloud(const mesh_ota_status_t *st)
+{
+    if (!s_mqtt_client || !st) {
+        return;
+    }
+    char id[16];
+    node_id_str(st->mac, id, sizeof(id));
+    char msg_id[48];
+    status_message_id(id, msg_id, sizeof(msg_id));
+    int64_t ts = 0;
+    unix_ts_s(&ts);
+    char topic[80];
+    snprintf(topic, sizeof(topic), "farmely/light/%s/up/ota", id);
+    char payload[512];
+    snprintf(payload, sizeof(payload),
+             "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"ota\",\"data\":{\"status\":\"%s\",\"fw_version\":\"%s\",\"ota_msg_id\":\"%s\",\"detail\":\"%s\"}}",
+             msg_id, ts,
+             st->status[0] ? st->status : "",
+             st->fw_version[0] ? st->fw_version : "",
+             st->ota_msg_id[0] ? st->ota_msg_id : "",
+             st->detail[0] ? st->detail : "");
+    esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 0);
+}
+
+static void mesh_ota_status_callback(const char *status,
+                                     const char *fw_version,
+                                     const char *ota_msg_id,
+                                     const char *detail)
+{
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    if (esp_mesh_is_root()) {
+        if (!s_mqtt_client) {
+            ESP_LOGW(MESH_TAG, "OTA status drop: MQTT not ready");
+            return;
+        }
+        char id[16];
+        node_id_str(mac, id, sizeof(id));
+        char msg_id[48];
+        status_message_id(id, msg_id, sizeof(msg_id));
+        int64_t ts = 0;
+        unix_ts_s(&ts);
+        char topic[80];
+        snprintf(topic, sizeof(topic), "farmely/gateway/%s/up/ota", id);
+        char payload[512];
+        snprintf(payload, sizeof(payload),
+                 "{\"v\":1,\"msg_id\":\"%s\",\"ts\":%" PRId64 ",\"type\":\"ota\",\"data\":{\"status\":\"%s\",\"fw_version\":\"%s\",\"ota_msg_id\":\"%s\",\"detail\":\"%s\"}}",
+                 msg_id, ts,
+                 status ? status : "",
+                 fw_version ? fw_version : "",
+                 ota_msg_id ? ota_msg_id : "",
+                 detail ? detail : "");
+        esp_mqtt_client_publish(s_mqtt_client, topic, payload, 0, 1, 0);
+        return;
+    }
+
+    if (!s_have_root_addr) {
+        ESP_LOGW(MESH_TAG, "OTA status drop: root not known");
+        return;
+    }
+
+    mesh_ota_status_t st = {
+        .cmd = MESH_OTA_STATUS_CMD,
+    };
+    memcpy(st.mac, mac, 6);
+    strlcpy(st.status, status ? status : "", sizeof(st.status));
+    strlcpy(st.fw_version, fw_version ? fw_version : "", sizeof(st.fw_version));
+    strlcpy(st.ota_msg_id, ota_msg_id ? ota_msg_id : "", sizeof(st.ota_msg_id));
+    strlcpy(st.detail, detail ? detail : "", sizeof(st.detail));
+    mesh_data_t data = {
+        .data = (uint8_t *)&st,
+        .size = sizeof(st),
+        .proto = MESH_PROTO_BIN,
+        .tos = MESH_TOS_P2P,
+    };
+    esp_err_t err = esp_mesh_send(&s_root_addr, &data, MESH_DATA_P2P, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "OTA status upstream send err:0x%x", err);
+    }
+}
+
+static void mesh_forward_ota_request(const char *target_id,
+                                     const char *url,
+                                     const char *sha256,
+                                     const char *fw_version,
+                                     const char *ota_msg_id,
+                                     const char *product_id,
+                                     const char *hw_version)
+{
+    if (!esp_mesh_is_root() || !target_id) {
+        return;
+    }
+    node_entry_t snapshot = {0};
+    nodes_lock();
+    int idx = node_find_by_id_locked(target_id, &snapshot);
+    nodes_unlock();
+    if (idx < 0) {
+        ESP_LOGW(MESH_TAG, "OTA target not found: %s", target_id);
+        return;
+    }
+    mesh_ota_cmd_t cmd = {
+        .cmd = MESH_OTA_CMD,
+    };
+    memcpy(cmd.mac, s_self_mac, 6);
+    strlcpy(cmd.url, url ? url : "", sizeof(cmd.url));
+    strlcpy(cmd.sha256, sha256 ? sha256 : "", sizeof(cmd.sha256));
+    strlcpy(cmd.fw_version, fw_version ? fw_version : "", sizeof(cmd.fw_version));
+    strlcpy(cmd.ota_msg_id, ota_msg_id ? ota_msg_id : "", sizeof(cmd.ota_msg_id));
+    strlcpy(cmd.product_id, product_id ? product_id : CONFIG_MESH_PRODUCT_ID,
+            sizeof(cmd.product_id));
+    strlcpy(cmd.hw_version, hw_version ? hw_version : CONFIG_MESH_HW_VERSION,
+            sizeof(cmd.hw_version));
+    mesh_data_t data = {
+        .data = (uint8_t *)&cmd,
+        .size = sizeof(cmd),
+        .proto = MESH_PROTO_BIN,
+        .tos = MESH_TOS_P2P,
+    };
+    esp_err_t err = esp_mesh_send(&snapshot.addr, &data, MESH_DATA_P2P, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "OTA request send failed for %s: 0x%x", target_id, err);
+    }
+}
+
+static void handle_mqtt_ota_command(const char *topic, int topic_len,
+                                    const char *payload, int len)
+{
+    if (!esp_mesh_is_root() || !topic || !payload || len <= 0) {
+        return;
+    }
+    const char *new_gateway_prefix = "farmely/gateway/";
+    const char *new_light_prefix = "farmely/light/";
+    const char *new_ota_suffix = "/down/ota";
+    size_t gateway_prefix_len = strlen(new_gateway_prefix);
+    size_t light_prefix_len = strlen(new_light_prefix);
+    size_t ota_suffix_len = strlen(new_ota_suffix);
+    bool is_gateway_ota =
+        (size_t)topic_len > gateway_prefix_len + ota_suffix_len &&
+        strncmp(topic, new_gateway_prefix, gateway_prefix_len) == 0 &&
+        strncmp(topic + topic_len - ota_suffix_len, new_ota_suffix, ota_suffix_len) == 0;
+    bool is_light_ota =
+        (size_t)topic_len > light_prefix_len + ota_suffix_len &&
+        strncmp(topic, new_light_prefix, light_prefix_len) == 0 &&
+        strncmp(topic + topic_len - ota_suffix_len, new_ota_suffix, ota_suffix_len) == 0;
+    if (!is_gateway_ota && !is_light_ota) {
+        return;
+    }
+
+    char topic_id[24] = {0};
+    int prefix_len = is_gateway_ota ? (int)gateway_prefix_len : (int)light_prefix_len;
+    int id_len = topic_len - prefix_len - (int)ota_suffix_len;
+    if (id_len <= 0 || id_len >= (int)sizeof(topic_id)) {
+        ESP_LOGW(MESH_TAG, "invalid OTA topic: %.*s", topic_len, topic);
+        return;
+    }
+    memcpy(topic_id, topic + prefix_len, id_len);
+
+    char url[256] = {0};
+    char sha256[65] = {0};
+    char fw_version[64] = {0};
+    char ota_msg_id[128] = {0};
+    char product_id[32] = {0};
+    char hw_version[32] = {0};
+    json_string_field(payload, "url", url, sizeof(url));
+    json_string_field(payload, "sha256", sha256, sizeof(sha256));
+    json_string_field(payload, "fw_version", fw_version, sizeof(fw_version));
+    json_string_field(payload, "msg_id", ota_msg_id, sizeof(ota_msg_id));
+    json_string_field(payload, "message_id", ota_msg_id, sizeof(ota_msg_id));
+    json_string_field(payload, "product_id", product_id, sizeof(product_id));
+    json_string_field(payload, "hw_version", hw_version, sizeof(hw_version));
+
+    if (url[0] == '\0' || sha256[0] == '\0') {
+        ESP_LOGW(MESH_TAG, "OTA payload missing url/sha256 for %s", topic_id);
+        return;
+    }
+
+    if (is_gateway_ota) {
+        ESP_LOGI(MESH_TAG, "starting gateway OTA for %s", topic_id);
+        esp_err_t err = mesh_ota_start(url, sha256, fw_version, ota_msg_id);
+        if (err != ESP_OK) {
+            ESP_LOGW(MESH_TAG, "gateway OTA start failed: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    ESP_LOGI(MESH_TAG, "forwarding OTA to node %s", topic_id);
+    mesh_forward_ota_request(topic_id, url, sha256, fw_version, ota_msg_id,
+                             product_id[0] ? product_id : CONFIG_MESH_PRODUCT_ID,
+                             hw_version[0] ? hw_version : CONFIG_MESH_HW_VERSION);
+}
+
 static void mqtt_dispatch(const char *topic, int topic_len, const char *payload, int len)
 {
     if (!topic || topic_len <= 0 || !payload || len <= 0 || !esp_mesh_is_root()) {
@@ -668,6 +1002,11 @@ static void mqtt_dispatch(const char *topic, int topic_len, const char *payload,
     memcpy(payload_buf, payload, len);
     payload_buf[len] = '\0';
     payload = payload_buf;
+
+    handle_mqtt_ota_command(topic, topic_len, payload, len);
+    if (strstr(topic, "/down/ota") != NULL) {
+        return;
+    }
 
     /* Attempt JSON envelope parsing for new-format commands */
     char msg_id_buf[128] = {0};
@@ -780,9 +1119,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t event_base,
         esp_mqtt_client_subscribe(s_mqtt_client, MQTT_TOPIC_NODE_CMD_SUB, 1);
         esp_mqtt_client_subscribe(s_mqtt_client, "farmely/light/+/down/cmd", 1);
         esp_mqtt_client_subscribe(s_mqtt_client, "farmely/gateway/+/down/cmd", 1);
+        esp_mqtt_client_subscribe(s_mqtt_client, "farmely/light/+/down/ota", 1);
+        esp_mqtt_client_subscribe(s_mqtt_client, "farmely/gateway/+/down/ota", 1);
         mqtt_publish_status("mqtt_connected");
         root_refresh_self();
         root_publish_gateway_status();
+        mesh_ota_confirm_running();
         break;
     case MQTT_EVENT_DATA:
         mqtt_dispatch(event->topic, event->topic_len, event->data, event->data_len);
@@ -927,6 +1269,8 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         if (esp_mesh_is_root()) {
             esp_netif_dhcpc_stop(netif_sta);
             esp_netif_dhcpc_start(netif_sta);
+        } else {
+            mesh_ota_confirm_running();
         }
         esp_mesh_comm_p2p_start();
     }
@@ -961,6 +1305,9 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         s_have_root_addr = true;
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_ROOT_ADDRESS>root address:"MACSTR"",
                  MAC2STR(root_addr->addr));
+        if (!esp_mesh_is_root()) {
+            mesh_ota_confirm_running();
+        }
     }
     break;
     case MESH_EVENT_VOTE_STARTED: {
@@ -1148,6 +1495,7 @@ static void gateway_provisioning_reset_task(void *arg)
 void app_main(void)
 {
     ESP_ERROR_CHECK(mesh_light_init());
+    mesh_ota_set_status_callback(mesh_ota_status_callback);
     ESP_ERROR_CHECK(nvs_flash_init());
     /*  tcpip initialization */
     ESP_ERROR_CHECK(esp_netif_init());

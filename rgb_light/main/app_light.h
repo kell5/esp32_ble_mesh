@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 esp_err_t app_light_init(void);
+void app_light_boot_blink(uint8_t times, uint32_t on_ms, uint32_t off_ms);
 
 void app_light_set_on(bool on);
 bool app_light_is_on(void);
