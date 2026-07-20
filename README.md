@@ -1,6 +1,6 @@
-# LightMesh 灯联网 ESP32 BLE Mesh 智能家居
+# LightMesh 灯联网
 
-本仓库是「LightMesh 灯联网」的 ESP32 智能家居开源工程，包含 Flutter App、ESP32-S3 可视门铃、**BLE Mesh 网关/灯节点**（主线）、ESP-WIFI-MESH 网关/节点（历史基线）、RGB 灯直连样例、云端设备模型、OTA 服务和 MJPEG 公网中继。
+本仓库是「LightMesh 灯联网」的 ESP32 开源工程，包含 Flutter App、ESP32-S3 可视门铃、**BLE Mesh 网关/灯节点**（主线）、ESP-WIFI-MESH 网关/节点（历史基线）、RGB 灯直连样例、云端设备模型、OTA 服务和 MJPEG 公网中继。
 
 ## 入口
 
